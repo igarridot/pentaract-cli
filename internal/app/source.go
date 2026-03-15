@@ -47,6 +47,12 @@ func walkSource(sourceDir string, onFile func(sourceFile) error, onSkip func(str
 		if path == sourceDir {
 			return nil
 		}
+		if d.Name() == ".gitkeep" {
+			if onSkip != nil {
+				onSkip(path)
+			}
+			return nil
+		}
 		if d.Type()&fs.ModeSymlink != 0 {
 			if onSkip != nil {
 				onSkip(path)

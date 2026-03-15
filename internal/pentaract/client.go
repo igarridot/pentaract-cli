@@ -204,8 +204,21 @@ func (c *Client) postUpload(ctx context.Context, token, storageID, localPath, re
 		return parseAPIError(resp)
 	}
 
+	// The backend flushes the 202 response as soon as it has registered the
+	// upload, but only returns from the handler after the multipart body has been
+	// fully consumed. We must therefore read to EOF here; otherwise the Go client
+	// can stop sending the remaining body bytes and leave the file record without
+	// any persisted chunks.
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(respBody)) == 0 {
+		return nil
+	}
+
 	var accepted UploadAccepted
-	if err := decodeJSONBody(resp.Body, &accepted); err != nil && !errors.Is(err, io.EOF) {
+	if err := json.Unmarshal(respBody, &accepted); err != nil {
 		return err
 	}
 	return nil

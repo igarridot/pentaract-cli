@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -181,6 +182,84 @@ func TestParseUploadProgressDetectsSentinel(t *testing.T) {
 	}
 	if !progress.HasMetrics {
 		t.Fatalf("HasMetrics = false, want true")
+	}
+}
+
+func TestPostUploadWaitsUntilServerConsumesMultipartBody(t *testing.T) {
+	const fileSize = 3 * 1024 * 1024
+
+	var receivedBytes atomic.Int64
+	consumedBody := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reader, err := r.MultipartReader()
+		if err != nil {
+			t.Fatalf("MultipartReader error: %v", err)
+		}
+
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("NextPart error: %v", err)
+			}
+
+			if part.FormName() != "file" {
+				_, _ = io.Copy(io.Discard, part)
+				continue
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"upload_id":"u1"}`))
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+
+			buf := make([]byte, 32*1024)
+			for {
+				n, err := part.Read(buf)
+				if n > 0 {
+					receivedBytes.Add(int64(n))
+					time.Sleep(250 * time.Microsecond)
+				}
+				if err == io.EOF {
+					close(consumedBody)
+					return
+				}
+				if err != nil {
+					t.Fatalf("part.Read error: %v", err)
+				}
+			}
+		}
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "large.bin")
+	if err := os.WriteFile(localPath, []byte(strings.Repeat("a", fileSize)), 0o600); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	if err := client.postUpload(context.Background(), "token", "storage-1", localPath, "dest/large.bin", "large.bin", "u1"); err != nil {
+		t.Fatalf("postUpload error: %v", err)
+	}
+
+	select {
+	case <-consumedBody:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("postUpload returned before the server finished consuming the request body")
+	}
+
+	if got := receivedBytes.Load(); got != fileSize {
+		t.Fatalf("received bytes = %d, want %d", got, fileSize)
 	}
 }
 
