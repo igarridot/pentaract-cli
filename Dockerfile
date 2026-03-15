@@ -6,7 +6,7 @@ COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
 
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/pentaract-cli ./cmd/pentaract-cli
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags='-s -w' -o /out/pentaract-cli ./cmd/pentaract-cli
 
 FROM public.ecr.aws/docker/library/alpine:3.21
 
