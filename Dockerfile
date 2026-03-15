@@ -8,7 +8,7 @@ COPY internal ./internal
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/pentaract-cli ./cmd/pentaract-cli
 
-FROM alpine:3.21
+FROM public.ecr.aws/docker/library/alpine:3.21
 
 WORKDIR /app
 
