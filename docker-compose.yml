@@ -1,0 +1,11 @@
+services:
+  cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    volumes:
+      - ./source:/source:ro
+    working_dir: /app
+    entrypoint: ["/usr/local/bin/pentaract-cli"]
