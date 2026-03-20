@@ -39,8 +39,6 @@ type uploadCoordinator struct {
 	retryDelay time.Duration
 }
 
-type sourceWalker func(onFile func(sourceFile) error) error
-
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
 		printUsage(stdout)
@@ -147,51 +145,45 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 
 	fmt.Fprintf(stdout, "Subiendo %d archivo(s) a storage %q (%s) en %q desde %s\n", stats.Files, storageName, storageID, emptyFallback(destRoot, "/"), cfg.SourceDir)
 
-	err = runSequentialUploadPipeline(
-		func(onFile func(sourceFile) error) error {
-			return walkSource(cfg.SourceDir, onFile, nil)
-		},
-		coordinator.launchUpload,
-		coordinator.finishUpload,
-		func(upload *activeUpload) {
-			cancelUploads(context.WithoutCancel(ctx), client, token, reporter, upload)
-		},
-	)
+	var verifyingUpload *activeUpload
+	var uploadingUpload *activeUpload
+	index := int64(0)
+	err = walkSource(cfg.SourceDir, func(file sourceFile) error {
+		index++
+		if verifyingUpload != nil {
+			if err := coordinator.finishUpload(verifyingUpload); err != nil {
+				cancelUploads(context.WithoutCancel(ctx), client, token, reporter, uploadingUpload)
+				return err
+			}
+			verifyingUpload = nil
+		}
+
+		next, err := coordinator.launchUpload(file, index)
+		if err != nil {
+			cancelUploads(context.WithoutCancel(ctx), client, token, reporter, uploadingUpload)
+			return err
+		}
+		verifyingUpload = uploadingUpload
+		uploadingUpload = next
+		return nil
+	}, nil)
 	if err != nil {
 		return err
+	}
+
+	if verifyingUpload != nil {
+		if err := coordinator.finishUpload(verifyingUpload); err != nil {
+			cancelUploads(context.WithoutCancel(ctx), client, token, reporter, uploadingUpload)
+			return err
+		}
+	}
+	if uploadingUpload != nil {
+		if err := coordinator.finishUpload(uploadingUpload); err != nil {
+			return err
+		}
 	}
 
 	reporter.finish()
-	return nil
-}
-
-func runSequentialUploadPipeline(walk sourceWalker, launch func(sourceFile, int64) (*activeUpload, error), finish func(*activeUpload) error, cancel func(*activeUpload)) error {
-	var active *activeUpload
-	index := int64(0)
-
-	err := walk(func(file sourceFile) error {
-		index++
-
-		upload, err := launch(file, index)
-		if err != nil {
-			return err
-		}
-
-		active = upload
-		if err := finish(upload); err != nil {
-			return err
-		}
-
-		active = nil
-		return nil
-	})
-	if err != nil {
-		if active != nil && cancel != nil {
-			cancel(active)
-		}
-		return err
-	}
-
 	return nil
 }
 
