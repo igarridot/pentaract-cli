@@ -17,7 +17,7 @@ type reporter struct {
 	totalBytes     int64
 	completedFiles int64
 	completedBytes int64
-	current        currentFileState
+	active         map[string]currentFileState
 	lastPrint      time.Time
 }
 
@@ -43,17 +43,15 @@ func newReporter(out io.Writer, totalFiles, totalBytes int64) *reporter {
 		out:        out,
 		totalFiles: totalFiles,
 		totalBytes: totalBytes,
-		current: currentFileState{
-			Status: "pending",
-		},
+		active:     map[string]currentFileState{},
 	}
 }
 
-func (r *reporter) startFile(index int64, file sourceFile, targetPath string, attempt int) {
+func (r *reporter) startFile(fileKey string, index int64, file sourceFile, targetPath string, attempt int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.current = currentFileState{
+	state := currentFileState{
 		Index:         index,
 		TotalFiles:    r.totalFiles,
 		RelativePath:  file.RelPath,
@@ -63,43 +61,75 @@ func (r *reporter) startFile(index int64, file sourceFile, targetPath string, at
 		Status:        "starting",
 		WorkersStatus: "active",
 	}
-	r.printLocked(true)
+	r.active[fileKey] = state
+	r.printLocked(state, true)
 }
 
-func (r *reporter) updateProgress(progress pentaract.UploadProgress) {
+func (r *reporter) updateProgress(fileKey string, progress pentaract.UploadProgress) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.current.Status = progress.Status
-	r.current.WorkersStatus = progress.WorkersStatus
-	r.current.UploadedBytes = progress.UploadedBytes
-	r.current.UploadedChunks = progress.Uploaded
-	r.current.TotalChunks = progress.Total
-	r.current.VerifiedChunks = progress.Verified
-	r.current.VerificationTotal = progress.VerificationTotal
-	r.printLocked(false)
+	state, ok := r.active[fileKey]
+	if !ok {
+		return
+	}
+
+	state.Status = progress.Status
+	state.WorkersStatus = progress.WorkersStatus
+	state.UploadedBytes = progress.UploadedBytes
+	state.UploadedChunks = progress.Uploaded
+	state.TotalChunks = progress.Total
+	state.VerifiedChunks = progress.Verified
+	state.VerificationTotal = progress.VerificationTotal
+	r.active[fileKey] = state
+	r.printLocked(state, false)
 }
 
-func (r *reporter) setStatus(status, message string) {
+func (r *reporter) setStatus(fileKey, status, message string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.current.Status = status
-	r.current.LastMessage = message
-	r.printLocked(true)
+	state, ok := r.active[fileKey]
+	if !ok {
+		return
+	}
+
+	state.Status = status
+	state.LastMessage = message
+	r.active[fileKey] = state
+	r.printLocked(state, true)
 }
 
-func (r *reporter) completeFile(file sourceFile, finalTarget string) {
+func (r *reporter) completeFile(fileKey string, file sourceFile, finalTarget string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	state, ok := r.active[fileKey]
+	if !ok {
+		state = currentFileState{
+			RelativePath: file.RelPath,
+			TargetPath:   finalTarget,
+			Size:         file.Size,
+			Status:       "done",
+		}
+	}
+
+	delete(r.active, fileKey)
 	r.completedFiles++
 	r.completedBytes += file.Size
-	r.current.Status = "done"
-	r.current.TargetPath = finalTarget
-	r.current.UploadedBytes = file.Size
-	r.current.LastMessage = "subida completada"
-	r.printLocked(true)
+
+	state.Status = "done"
+	state.TargetPath = finalTarget
+	state.UploadedBytes = file.Size
+	state.LastMessage = "subida completada"
+	r.printLocked(state, true)
+}
+
+func (r *reporter) removeFile(fileKey string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.active, fileKey)
 }
 
 func (r *reporter) finish() {
@@ -116,20 +146,25 @@ func (r *reporter) finish() {
 	)
 }
 
-func (r *reporter) printLocked(force bool) {
+func (r *reporter) currentUploadedBytesLocked() int64 {
+	currentBytes := r.completedBytes
+	for _, state := range r.active {
+		currentBytes += minInt64(state.UploadedBytes, state.Size)
+	}
+	return currentBytes
+}
+
+func (r *reporter) printLocked(state currentFileState, force bool) {
 	if !force && time.Since(r.lastPrint) < time.Second {
 		return
 	}
 	r.lastPrint = time.Now()
 
-	currentBytes := r.completedBytes
-	if r.current.UploadedBytes > 0 {
-		currentBytes += minInt64(r.current.UploadedBytes, r.current.Size)
-	}
+	currentBytes := r.currentUploadedBytesLocked()
 
 	filePercent := 100.0
-	if r.current.Size > 0 {
-		filePercent = float64(minInt64(r.current.UploadedBytes, r.current.Size)) / float64(r.current.Size) * 100
+	if state.Size > 0 {
+		filePercent = float64(minInt64(state.UploadedBytes, state.Size)) / float64(state.Size) * 100
 	}
 	globalPercent := 100.0
 	if r.totalBytes > 0 {
@@ -139,20 +174,20 @@ func (r *reporter) printLocked(force bool) {
 	fmt.Fprintf(
 		r.out,
 		"[%d/%d] %s -> %s | intento %d | estado=%s | fichero %.1f%% (%s/%s) | chunks %d/%d | verificacion %d/%d | workers=%s\n",
-		r.current.Index,
-		r.totalFiles,
-		r.current.RelativePath,
-		r.current.TargetPath,
-		r.current.Attempt,
-		r.current.Status,
+		state.Index,
+		state.TotalFiles,
+		state.RelativePath,
+		state.TargetPath,
+		state.Attempt,
+		state.Status,
 		filePercent,
-		humanBytes(minInt64(r.current.UploadedBytes, r.current.Size)),
-		humanBytes(r.current.Size),
-		r.current.UploadedChunks,
-		r.current.TotalChunks,
-		r.current.VerifiedChunks,
-		r.current.VerificationTotal,
-		emptyFallback(r.current.WorkersStatus, "unknown"),
+		humanBytes(minInt64(state.UploadedBytes, state.Size)),
+		humanBytes(state.Size),
+		state.UploadedChunks,
+		state.TotalChunks,
+		state.VerifiedChunks,
+		state.VerificationTotal,
+		emptyFallback(state.WorkersStatus, "unknown"),
 	)
 	fmt.Fprintf(
 		r.out,
@@ -162,7 +197,7 @@ func (r *reporter) printLocked(force bool) {
 		globalPercent,
 		humanBytes(minInt64(currentBytes, r.totalBytes)),
 		humanBytes(r.totalBytes),
-		renderOptionalMessage(r.current.LastMessage),
+		renderOptionalMessage(state.LastMessage),
 	)
 }
 
