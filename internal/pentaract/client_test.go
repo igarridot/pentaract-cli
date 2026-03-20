@@ -116,6 +116,100 @@ func TestUploadFileWithProgressStreamsMultipartAndCompletes(t *testing.T) {
 	}
 }
 
+func TestStartUploadSeparatesRequestCompletionFromTerminalVerification(t *testing.T) {
+	trackerReady := make(chan struct{})
+	allowDone := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/storages/storage-1/files/upload":
+			reader, err := r.MultipartReader()
+			if err != nil {
+				t.Fatalf("MultipartReader error: %v", err)
+			}
+			for {
+				part, err := reader.NextPart()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("NextPart error: %v", err)
+				}
+				_, _ = io.Copy(io.Discard, part)
+			}
+			close(trackerReady)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"upload_id":"upload-2"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/upload_progress":
+			select {
+			case <-trackerReady:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("timed out waiting for upload")
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"status\":\"verifying\",\"total\":1,\"uploaded\":1,\"total_bytes\":11,\"uploaded_bytes\":11,\"verification_total\":1,\"verified\":0,\"workers_status\":\"active\"}\n\n")
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-allowDone
+			_, _ = io.WriteString(w, "data: {\"status\":\"done\",\"total\":1,\"uploaded\":1,\"total_bytes\":11,\"uploaded_bytes\":11,\"verification_total\":1,\"verified\":1,\"workers_status\":\"active\"}\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "local.txt")
+	if err := os.WriteFile(localPath, []byte("hello world"), 0o600); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	session, err := client.StartUpload(context.Background(), UploadInput{
+		StorageID:      "storage-1",
+		Token:          "token",
+		LocalPath:      localPath,
+		RemotePath:     "dest/tmp.txt",
+		RemoteFilename: "tmp.txt",
+		UploadID:       "upload-2",
+	})
+	if err != nil {
+		t.Fatalf("StartUpload error: %v", err)
+	}
+
+	if err := session.WaitForRequest(); err != nil {
+		t.Fatalf("WaitForRequest error: %v", err)
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- session.Wait()
+	}()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("Wait returned too early: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(allowDone)
+
+	select {
+	case err := <-waitDone:
+		if err != nil {
+			t.Fatalf("Wait error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("Wait did not return after terminal progress")
+	}
+}
+
 func TestBuildMultipartEnvelopeProducesValidBody(t *testing.T) {
 	prefix, suffix, contentType, err := buildMultipartEnvelope("dir/sub", "remote.bin", "upload-9")
 	if err != nil {
