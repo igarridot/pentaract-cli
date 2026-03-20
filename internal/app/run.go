@@ -14,9 +14,7 @@ import (
 	"github.com/Dominux/pentaract-cli/internal/pentaract"
 )
 
-const maxActiveUploads = 2
-
-type pendingUpload struct {
+type activeUpload struct {
 	fileKey     string
 	index       int64
 	file        sourceFile
@@ -25,7 +23,7 @@ type pendingUpload struct {
 	tempPath    string
 	attempt     int
 	uploadID    string
-	session     *pentaract.UploadSession
+	handle      *pentaract.UploadHandle
 }
 
 type uploadCoordinator struct {
@@ -147,36 +145,40 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 
 	fmt.Fprintf(stdout, "Subiendo %d archivo(s) a storage %q (%s) en %q desde %s\n", stats.Files, storageName, storageID, emptyFallback(destRoot, "/"), cfg.SourceDir)
 
-	var pending []*pendingUpload
+	var verifyingUpload *activeUpload
+	var uploadingUpload *activeUpload
 	index := int64(0)
 	err = walkSource(cfg.SourceDir, func(file sourceFile) error {
 		index++
-		for len(pending) >= maxActiveUploads {
-			current := pending[0]
-			pending = pending[1:]
-			if err := coordinator.finalize(current); err != nil {
-				cancelPendingUploads(context.WithoutCancel(ctx), client, token, reporter, pending)
+		if verifyingUpload != nil {
+			if err := coordinator.finishUpload(verifyingUpload); err != nil {
+				cancelUploads(context.WithoutCancel(ctx), client, token, reporter, uploadingUpload)
 				return err
 			}
+			verifyingUpload = nil
 		}
 
-		next, err := coordinator.start(file, index)
+		next, err := coordinator.launchUpload(file, index)
 		if err != nil {
-			cancelPendingUploads(context.WithoutCancel(ctx), client, token, reporter, pending)
+			cancelUploads(context.WithoutCancel(ctx), client, token, reporter, uploadingUpload)
 			return err
 		}
-		pending = append(pending, next)
+		verifyingUpload = uploadingUpload
+		uploadingUpload = next
 		return nil
 	}, nil)
 	if err != nil {
 		return err
 	}
 
-	for len(pending) > 0 {
-		current := pending[0]
-		pending = pending[1:]
-		if err := coordinator.finalize(current); err != nil {
-			cancelPendingUploads(context.WithoutCancel(ctx), client, token, reporter, pending)
+	if verifyingUpload != nil {
+		if err := coordinator.finishUpload(verifyingUpload); err != nil {
+			cancelUploads(context.WithoutCancel(ctx), client, token, reporter, uploadingUpload)
+			return err
+		}
+	}
+	if uploadingUpload != nil {
+		if err := coordinator.finishUpload(uploadingUpload); err != nil {
 			return err
 		}
 	}
@@ -185,17 +187,17 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	return nil
 }
 
-func (u *uploadCoordinator) start(file sourceFile, index int64) (*pendingUpload, error) {
+func (u *uploadCoordinator) launchUpload(file sourceFile, index int64) (*activeUpload, error) {
 	desiredPath := joinRemotePath(u.destRoot, file.RelPath)
 	finalPath, err := u.planner.ResolveAvailablePath(u.ctx, desiredPath)
 	if err != nil {
 		return nil, err
 	}
 
-	return u.startAttempt(file, index, desiredPath, finalPath, 1)
+	return u.launchUploadAttempt(file, index, desiredPath, finalPath, 1)
 }
 
-func (u *uploadCoordinator) startAttempt(file sourceFile, index int64, desiredPath, finalPath string, attempt int) (*pendingUpload, error) {
+func (u *uploadCoordinator) launchUploadAttempt(file sourceFile, index int64, desiredPath, finalPath string, attempt int) (*activeUpload, error) {
 	fileKey := fmt.Sprintf("%d:%s", index, file.RelPath)
 	u.reporter.startFile(fileKey, index, file, finalPath, attempt)
 
@@ -219,7 +221,7 @@ func (u *uploadCoordinator) startAttempt(file sourceFile, index int64, desiredPa
 
 	_ = session.WaitForRequest()
 
-	return &pendingUpload{
+	return &activeUpload{
 		fileKey:     fileKey,
 		index:       index,
 		file:        file,
@@ -228,99 +230,99 @@ func (u *uploadCoordinator) startAttempt(file sourceFile, index int64, desiredPa
 		tempPath:    tempPath,
 		attempt:     attempt,
 		uploadID:    uploadID,
-		session:     session,
+		handle:      session,
 	}, nil
 }
 
-func (u *uploadCoordinator) finalize(pending *pendingUpload) error {
-	uploadCompleted, lastErr, err := u.waitForUploadCompletion(pending)
+func (u *uploadCoordinator) finishUpload(upload *activeUpload) error {
+	uploadCompleted, lastErr, err := u.waitForUploadResult(upload)
 	if err != nil {
-		u.reporter.removeFile(pending.fileKey)
+		u.reporter.removeFile(upload.fileKey)
 		return err
 	}
 	if !uploadCompleted {
-		u.reporter.removeFile(pending.fileKey)
+		u.reporter.removeFile(upload.fileKey)
 		if lastErr == nil {
 			lastErr = errors.New("upload did not complete")
 		}
-		return fmt.Errorf("subiendo %s: %w", pending.file.RelPath, lastErr)
+		return fmt.Errorf("subiendo %s: %w", upload.file.RelPath, lastErr)
 	}
 
-	u.reporter.setStatus(pending.fileKey, "moving", "moviendo al destino final")
+	u.reporter.setStatus(upload.fileKey, "moving", "moviendo al destino final")
 	for moveAttempt := 1; moveAttempt <= u.retries; moveAttempt++ {
-		err := u.client.Move(u.ctx, u.token, u.storageID, pending.tempPath, pending.finalPath)
+		err := u.client.Move(u.ctx, u.token, u.storageID, upload.tempPath, upload.finalPath)
 		if err == nil {
-			u.planner.RememberPath(pending.finalPath)
-			u.reporter.completeFile(pending.fileKey, pending.file, pending.finalPath)
+			u.planner.RememberPath(upload.finalPath)
+			u.reporter.completeFile(upload.fileKey, upload.file, upload.finalPath)
 			return nil
 		}
 
 		if moveAttempt == u.retries || !pentaract.IsRetryable(err) {
-			u.reporter.removeFile(pending.fileKey)
-			return fmt.Errorf("moviendo %s a %s: %w", pending.tempPath, pending.finalPath, err)
+			u.reporter.removeFile(upload.fileKey)
+			return fmt.Errorf("moviendo %s a %s: %w", upload.tempPath, upload.finalPath, err)
 		}
 
-		u.planner.Invalidate(pathDir(pending.finalPath))
-		pending.finalPath, err = u.planner.ResolveAvailablePath(u.ctx, pending.desiredPath)
+		u.planner.Invalidate(pathDir(upload.finalPath))
+		upload.finalPath, err = u.planner.ResolveAvailablePath(u.ctx, upload.desiredPath)
 		if err != nil {
-			u.reporter.removeFile(pending.fileKey)
+			u.reporter.removeFile(upload.fileKey)
 			return err
 		}
-		u.reporter.setStatus(pending.fileKey, "moving", fmt.Sprintf("reintentando move a %s", pending.finalPath))
+		u.reporter.setStatus(upload.fileKey, "moving", fmt.Sprintf("reintentando move a %s", upload.finalPath))
 		if err := sleepWithContext(u.ctx, u.retryDelay); err != nil {
-			u.reporter.removeFile(pending.fileKey)
+			u.reporter.removeFile(upload.fileKey)
 			return err
 		}
 	}
 
-	u.reporter.removeFile(pending.fileKey)
+	u.reporter.removeFile(upload.fileKey)
 	return nil
 }
 
-func (u *uploadCoordinator) waitForUploadCompletion(pending *pendingUpload) (bool, error, error) {
+func (u *uploadCoordinator) waitForUploadResult(upload *activeUpload) (bool, error, error) {
 	for {
-		err := pending.session.Wait()
+		err := upload.handle.Wait()
 		if err == nil {
 			return true, nil, nil
 		}
 
 		lastErr := err
-		exists, existsErr := u.client.FileExists(context.WithoutCancel(u.ctx), u.token, u.storageID, pending.tempPath)
+		exists, existsErr := u.client.FileExists(context.WithoutCancel(u.ctx), u.token, u.storageID, upload.tempPath)
 		if existsErr == nil && exists {
 			return true, nil, nil
 		}
 
-		if pending.attempt == u.retries || !pentaract.IsRetryable(err) {
+		if upload.attempt == u.retries || !pentaract.IsRetryable(err) {
 			return false, lastErr, nil
 		}
 
-		u.reporter.setStatus(pending.fileKey, "retrying", fmt.Sprintf("reintento %d/%d tras error: %v", pending.attempt, u.retries, err))
+		u.reporter.setStatus(upload.fileKey, "retrying", fmt.Sprintf("reintento %d/%d tras error: %v", upload.attempt, u.retries, err))
 		if err := sleepWithContext(u.ctx, u.retryDelay); err != nil {
 			return false, nil, err
 		}
 
-		nextAttempt, startErr := u.startAttempt(pending.file, pending.index, pending.desiredPath, pending.finalPath, pending.attempt+1)
+		nextAttempt, startErr := u.launchUploadAttempt(upload.file, upload.index, upload.desiredPath, upload.finalPath, upload.attempt+1)
 		if startErr != nil {
 			return false, nil, startErr
 		}
 
-		pending.tempPath = nextAttempt.tempPath
-		pending.attempt = nextAttempt.attempt
-		pending.uploadID = nextAttempt.uploadID
-		pending.session = nextAttempt.session
+		upload.tempPath = nextAttempt.tempPath
+		upload.attempt = nextAttempt.attempt
+		upload.uploadID = nextAttempt.uploadID
+		upload.handle = nextAttempt.handle
 	}
 }
 
-func cancelPendingUploads(ctx context.Context, client *pentaract.Client, token string, reporter *reporter, pending []*pendingUpload) {
-	for _, item := range pending {
-		if item == nil {
+func cancelUploads(ctx context.Context, client *pentaract.Client, token string, reporter *reporter, uploads ...*activeUpload) {
+	for _, upload := range uploads {
+		if upload == nil {
 			continue
 		}
-		reporter.removeFile(item.fileKey)
-		if item.uploadID == "" {
+		reporter.removeFile(upload.fileKey)
+		if upload.uploadID == "" {
 			continue
 		}
-		_ = client.CancelUpload(ctx, token, item.uploadID)
+		_ = client.CancelUpload(ctx, token, upload.uploadID)
 	}
 }
 

@@ -29,7 +29,7 @@ type Client struct {
 	http    *http.Client
 }
 
-type UploadSession struct {
+type UploadHandle struct {
 	requestErrCh chan error
 	watchErrCh   chan error
 
@@ -138,36 +138,36 @@ func (c *Client) FileExists(ctx context.Context, token, storageID, fullPath stri
 }
 
 func (c *Client) UploadFileWithProgress(ctx context.Context, input UploadInput) error {
-	session, err := c.StartUpload(ctx, input)
+	handle, err := c.StartUpload(ctx, input)
 	if err != nil {
 		return err
 	}
-	return session.Wait()
+	return handle.Wait()
 }
 
-func (s *UploadSession) WaitForRequest() error {
-	if s == nil {
+func (h *UploadHandle) WaitForRequest() error {
+	if h == nil {
 		return nil
 	}
-	s.requestOnce.Do(func() {
-		s.requestErr = <-s.requestErrCh
+	h.requestOnce.Do(func() {
+		h.requestErr = <-h.requestErrCh
 	})
-	return s.requestErr
+	return h.requestErr
 }
 
-func (s *UploadSession) waitForProgress() error {
-	if s == nil {
+func (h *UploadHandle) waitForProgress() error {
+	if h == nil {
 		return nil
 	}
-	s.watchOnce.Do(func() {
-		s.watchErr = <-s.watchErrCh
+	h.watchOnce.Do(func() {
+		h.watchErr = <-h.watchErrCh
 	})
-	return s.watchErr
+	return h.watchErr
 }
 
-func (s *UploadSession) Wait() error {
-	postErr := s.WaitForRequest()
-	watchErr := s.waitForProgress()
+func (h *UploadHandle) Wait() error {
+	postErr := h.WaitForRequest()
+	watchErr := h.waitForProgress()
 
 	switch {
 	case postErr == nil && watchErr == nil:
@@ -183,7 +183,7 @@ func (s *UploadSession) Wait() error {
 	}
 }
 
-func (c *Client) StartUpload(ctx context.Context, input UploadInput) (*UploadSession, error) {
+func (c *Client) StartUpload(ctx context.Context, input UploadInput) (*UploadHandle, error) {
 	if input.UploadID == "" {
 		return nil, errors.New("upload id is required")
 	}
@@ -197,22 +197,22 @@ func (c *Client) StartUpload(ctx context.Context, input UploadInput) (*UploadSes
 	}
 
 	requestDone := make(chan struct{})
-	session := &UploadSession{
+	handle := &UploadHandle{
 		requestErrCh: make(chan error, 1),
 		watchErrCh:   make(chan error, 1),
 	}
 
 	go func() {
-		session.watchErrCh <- c.watchUploadProgress(ctx, input.Token, input.UploadID, requestDone, input.OnProgress)
+		handle.watchErrCh <- c.watchUploadProgress(ctx, input.Token, input.UploadID, requestDone, input.OnProgress)
 	}()
 
 	go func() {
 		postErr := c.postUpload(ctx, input.Token, input.StorageID, input.LocalPath, remotePath, remoteFilename, input.UploadID)
 		close(requestDone)
-		session.requestErrCh <- postErr
+		handle.requestErrCh <- postErr
 	}()
 
-	return session, nil
+	return handle, nil
 }
 
 func (c *Client) postUpload(ctx context.Context, token, storageID, localPath, remotePath, remoteFilename, uploadID string) error {

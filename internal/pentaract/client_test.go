@@ -171,7 +171,7 @@ func TestStartUploadSeparatesRequestCompletionFromTerminalVerification(t *testin
 		t.Fatalf("WriteFile error: %v", err)
 	}
 
-	session, err := client.StartUpload(context.Background(), UploadInput{
+	handle, err := client.StartUpload(context.Background(), UploadInput{
 		StorageID:      "storage-1",
 		Token:          "token",
 		LocalPath:      localPath,
@@ -183,13 +183,13 @@ func TestStartUploadSeparatesRequestCompletionFromTerminalVerification(t *testin
 		t.Fatalf("StartUpload error: %v", err)
 	}
 
-	if err := session.WaitForRequest(); err != nil {
+	if err := handle.WaitForRequest(); err != nil {
 		t.Fatalf("WaitForRequest error: %v", err)
 	}
 
 	waitDone := make(chan error, 1)
 	go func() {
-		waitDone <- session.Wait()
+		waitDone <- handle.Wait()
 	}()
 
 	select {
