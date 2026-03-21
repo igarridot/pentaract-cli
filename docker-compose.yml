@@ -1,8 +1,6 @@
 services:
   cli:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: norbega/pentaract-cli:latest
     env_file:
       - .env
     volumes:
