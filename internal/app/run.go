@@ -25,6 +25,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	switch args[0] {
 	case "upload":
 		return runUpload(ctx, args[1:], stdout, stderr)
+	case "download":
+		return runDownload(ctx, args[1:], stdout, stderr)
 	case "-h", "--help", "help":
 		printUsage(stdout)
 		return nil
@@ -308,12 +310,20 @@ func ensureContainer() error {
 
 func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  pentaract-cli upload --storage <id|name> --dest <path>")
+	fmt.Fprintln(w, "  pentaract-cli upload   --storage <id|name> --dest <path>")
+	fmt.Fprintln(w, "  pentaract-cli download --storage <id|name> --src <path>")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Options:")
+	fmt.Fprintln(w, "Upload options:")
 	fmt.Fprintln(w, "  --env-file .env   Path to .env with credentials")
 	fmt.Fprintln(w, "  --source /source  Source directory inside the container")
+	fmt.Fprintln(w, "  --dest <path>     Destination path inside the storage")
 	fmt.Fprintln(w, "  --retries 3       Retries per file")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Download options:")
+	fmt.Fprintln(w, "  --env-file .env       Path to .env with credentials")
+	fmt.Fprintln(w, "  --src <path>          Remote path inside the storage to download")
+	fmt.Fprintln(w, "  --output /downloads   Local output directory")
+	fmt.Fprintln(w, "  --retries 3           Retries per file")
 }
 
 func firstNonEmpty(values ...string) string {

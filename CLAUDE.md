@@ -4,7 +4,7 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Project
 
-Pentaract CLI is a containerized Go CLI tool that uploads files from a local directory to a Pentaract server (a self-hosted file storage service using Telegram channels as distributed chunk storage). It runs exclusively inside Docker containers and streams uploads with automatic retries, progress tracking, and conflict resolution.
+Pentaract CLI is a containerized Go CLI tool that uploads and downloads files to/from a Pentaract server (a self-hosted file storage service using Telegram channels as distributed chunk storage). It runs exclusively inside Docker containers and streams transfers with automatic retries, progress tracking, and conflict resolution.
 
 ## Commands
 
@@ -19,6 +19,10 @@ go test ./...
 # Upload files to Pentaract
 make upload DEST=backups/2026
 make upload DEST=backups/2026 STORAGE="My Storage"
+
+# Download files from Pentaract
+make download SRC=backups/2026
+make download SRC=backups/2026 STORAGE="My Storage"
 
 # Open a shell in the container
 make shell
@@ -37,9 +41,11 @@ Signal handling (SIGINT/SIGTERM) → context cancellation → `app.Run()`.
 
 **Upload**: `runUpload()` scans source dir → collects files → pre-warms remote directory cache → `runPipelinedUploads()` with concurrency of 2 → per-file: `ResolveAvailablePath()` → `UploadFileWithProgress()` → streams multipart to server → polls SSE for progress → retries on failure.
 
+**Download**: `runDownload()` → `walkRemoteTree()` recursively lists remote dir via `/files/tree/` → for each file: `DownloadFile()` streams GET `/files/download/` response directly to local disk → retries on failure with exponential backoff.
+
 ### Packages
 
-- `internal/app/` — Upload orchestration (`run.go`), file discovery (`source.go`), remote path resolution (`paths.go`), CLI progress reporting (`progress.go`)
+- `internal/app/` — Upload orchestration (`run.go`), download orchestration (`download.go`), file discovery (`source.go`), remote path resolution (`paths.go`), CLI progress reporting (`progress.go`)
 - `internal/pentaract/` — HTTP client for Pentaract API (`client.go`), data types (`types.go`)
 - `internal/config/` — .env file parsing and configuration loading (`env.go`)
 
@@ -94,3 +100,4 @@ The CLI refuses to run outside a container. It checks `/.dockerenv` and `/proc/1
 | `GET` | `/storages/{id}/files/tree/{path}` | List directory |
 | `POST` | `/storages/{id}/files/upload` | Upload file (multipart) |
 | `GET` | `/upload_progress?upload_id={id}` | Poll progress (SSE) |
+| `GET` | `/storages/{id}/files/download/{path}` | Download file (streaming) |

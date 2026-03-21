@@ -2,10 +2,11 @@ COMPOSE ?= docker compose
 SERVICE ?= cli
 ENV_FILE ?= .env
 DEST ?=
+SRC ?=
 STORAGE ?=
 SCREEN_SESSION ?= pentaract-cli
 
-.PHONY: help build test upload shell screen clean
+.PHONY: help build test upload download shell screen clean
 
 help:
 	@printf '%s\n' \
@@ -14,6 +15,8 @@ help:
 		'  make test                      Run go test ./...' \
 		'  make upload DEST=...           Upload ./source to the given remote path' \
 		'  make upload DEST=... STORAGE=...  Force a specific storage for this run' \
+		'  make download SRC=...          Download remote path to ./downloaded_files' \
+		'  make download SRC=... STORAGE=...  Force a specific storage for this run' \
 		'  make shell                     Open a shell inside the runtime container' \
 		'  make screen                    Reuse or create the screen session pentaract-cli' \
 		'  make clean                     Remove the local image created by compose'
@@ -27,6 +30,11 @@ test:
 upload:
 	@if [ -z "$(DEST)" ]; then echo 'Usage: make upload DEST=remote/path [STORAGE="My Storage"]'; exit 1; fi
 	$(COMPOSE) run --rm $(SERVICE) upload --env-file $(ENV_FILE) $(if $(STORAGE),--storage "$(STORAGE)",) --dest "$(DEST)"
+
+download:
+	@if [ -z "$(SRC)" ]; then echo 'Usage: make download SRC=remote/path [STORAGE="My Storage"]'; exit 1; fi
+	@mkdir -p ./downloaded_files
+	$(COMPOSE) run --rm -v ./downloaded_files:/downloads $(SERVICE) download --env-file $(ENV_FILE) $(if $(STORAGE),--storage "$(STORAGE)",) --src "$(SRC)"
 
 shell:
 	$(COMPOSE) run --rm --entrypoint /bin/sh $(SERVICE)
