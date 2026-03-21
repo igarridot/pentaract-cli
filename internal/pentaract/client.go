@@ -16,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,17 @@ var errUploadTrackerNotFound = errors.New("upload progress tracker not found")
 type Client struct {
 	apiBase string
 	http    *http.Client
+}
+
+type UploadHandle struct {
+	requestErrCh chan error
+	watchErrCh   chan error
+
+	requestOnce sync.Once
+	requestErr  error
+
+	watchOnce sync.Once
+	watchErr  error
 }
 
 func NewClient(rawBaseURL string) (*Client, error) {
@@ -126,27 +138,36 @@ func (c *Client) FileExists(ctx context.Context, token, storageID, fullPath stri
 }
 
 func (c *Client) UploadFileWithProgress(ctx context.Context, input UploadInput) error {
-	if input.UploadID == "" {
-		return errors.New("upload id is required")
+	handle, err := c.StartUpload(ctx, input)
+	if err != nil {
+		return err
 	}
-	if input.RemotePath == "" {
-		return errors.New("remote path is required")
-	}
-	remotePath := cleanRemotePath(input.RemotePath)
-	remoteFilename := input.RemoteFilename
-	if strings.TrimSpace(remoteFilename) == "" {
-		_, remoteFilename = splitRemotePath(remotePath)
-	}
+	return handle.Wait()
+}
 
-	requestDone := make(chan struct{})
-	watchErrCh := make(chan error, 1)
-	go func() {
-		watchErrCh <- c.watchUploadProgress(ctx, input.Token, input.UploadID, requestDone, input.OnProgress)
-	}()
+func (h *UploadHandle) WaitForRequest() error {
+	if h == nil {
+		return nil
+	}
+	h.requestOnce.Do(func() {
+		h.requestErr = <-h.requestErrCh
+	})
+	return h.requestErr
+}
 
-	postErr := c.postUpload(ctx, input.Token, input.StorageID, input.LocalPath, remotePath, remoteFilename, input.UploadID)
-	close(requestDone)
-	watchErr := <-watchErrCh
+func (h *UploadHandle) waitForProgress() error {
+	if h == nil {
+		return nil
+	}
+	h.watchOnce.Do(func() {
+		h.watchErr = <-h.watchErrCh
+	})
+	return h.watchErr
+}
+
+func (h *UploadHandle) Wait() error {
+	postErr := h.WaitForRequest()
+	watchErr := h.waitForProgress()
 
 	switch {
 	case postErr == nil && watchErr == nil:
@@ -160,6 +181,38 @@ func (c *Client) UploadFileWithProgress(ctx context.Context, input UploadInput) 
 	default:
 		return errors.Join(postErr, watchErr)
 	}
+}
+
+func (c *Client) StartUpload(ctx context.Context, input UploadInput) (*UploadHandle, error) {
+	if input.UploadID == "" {
+		return nil, errors.New("upload id is required")
+	}
+	if input.RemotePath == "" {
+		return nil, errors.New("remote path is required")
+	}
+	remotePath := cleanRemotePath(input.RemotePath)
+	remoteFilename := input.RemoteFilename
+	if strings.TrimSpace(remoteFilename) == "" {
+		_, remoteFilename = splitRemotePath(remotePath)
+	}
+
+	requestDone := make(chan struct{})
+	handle := &UploadHandle{
+		requestErrCh: make(chan error, 1),
+		watchErrCh:   make(chan error, 1),
+	}
+
+	go func() {
+		handle.watchErrCh <- c.watchUploadProgress(ctx, input.Token, input.UploadID, requestDone, input.OnProgress)
+	}()
+
+	go func() {
+		postErr := c.postUpload(ctx, input.Token, input.StorageID, input.LocalPath, remotePath, remoteFilename, input.UploadID)
+		close(requestDone)
+		handle.requestErrCh <- postErr
+	}()
+
+	return handle, nil
 }
 
 func (c *Client) postUpload(ctx context.Context, token, storageID, localPath, remotePath, remoteFilename, uploadID string) error {
