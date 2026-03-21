@@ -18,6 +18,7 @@ go test ./...
 
 # Upload files to Pentaract
 make upload DEST=backups/2026
+make upload DEST=backups/2026 ON_CONFLICT=skip    # skip already-uploaded files
 make upload DEST=backups/2026 STORAGE="My Storage"
 
 # Download files from Pentaract
@@ -39,13 +40,13 @@ Signal handling (SIGINT/SIGTERM) → context cancellation → `app.Run()`.
 
 ### Key data flow
 
-**Upload**: `runUpload()` scans source dir → collects files → pre-warms remote directory cache → `runPipelinedUploads()` with concurrency of 2 → per-file: `ResolveAvailablePath()` → `UploadFileWithProgress()` → streams multipart to server → polls SSE for progress → retries on failure.
+**Upload**: `runUpload()` scans source dir → collects files → pre-warms remote directory cache → `runPipelinedUploads()` with concurrency of 2 → per-file: if `--on-conflict skip`, checks `ExistsWithSize()` against cached dir listing → if match, skips; otherwise `ResolveAvailablePath()` → `UploadFileWithProgress()` → streams multipart to server (passes `on_conflict` field) → polls SSE for progress → retries on failure.
 
 **Download**: `runDownload()` → `walkRemoteTree()` recursively lists remote dir via `/files/tree/` → for each file: `DownloadFile()` streams GET `/files/download/` response directly to local disk → retries on failure with exponential backoff.
 
 ### Packages
 
-- `internal/app/` — Upload orchestration (`run.go`), download orchestration (`download.go`), file discovery (`source.go`), remote path resolution (`paths.go`), CLI progress reporting (`progress.go`)
+- `internal/app/` — Upload orchestration (`run.go`), download orchestration (`download.go`), file discovery (`source.go`), remote path resolution and conflict detection (`paths.go`), CLI progress reporting (`progress.go`)
 - `internal/pentaract/` — HTTP client for Pentaract API (`client.go`), data types (`types.go`)
 - `internal/config/` — .env file parsing and configuration loading (`env.go`)
 
@@ -57,7 +58,8 @@ Signal handling (SIGINT/SIGTERM) → context cancellation → `app.Run()`.
 - **Connection pooling (C3)**: Custom HTTP transport with `MaxIdleConnsPerHost=10` for concurrent upload + progress polling.
 - **Directory pre-warming (C4)**: `PrewarmDirs()` fetches remote directory listings in parallel (up to 5) before uploads start.
 - **Adaptive polling (C5)**: Progress poll interval varies: 500ms during verification, 2s for files >100MB, 1s default.
-- **Thread-safe path planner**: `remoteNamePlanner` uses mutex for safe concurrent access from pipelined uploads.
+- **Thread-safe path planner**: `remoteNamePlanner` uses mutex for safe concurrent access from pipelined uploads. Cache stores file sizes for skip-mode conflict detection.
+- **Conflict modes**: `--on-conflict keep_both` (default) renames duplicates with `(1)` suffix; `--on-conflict skip` checks name+path+size against pre-warmed cache and skips matching files.
 
 ## Configuration
 
@@ -84,10 +86,10 @@ go test ./...
 ```
 
 Tests use `httptest.NewServer` for HTTP mocking. Key test files:
-- `internal/pentaract/client_test.go` — Upload streaming, progress parsing, multipart envelope
+- `internal/pentaract/client_test.go` — Upload streaming, progress parsing, multipart envelope (incl. on_conflict field)
 - `internal/pentaract/download_test.go` — Download streaming, progress callback, error handling, partial cleanup
 - `internal/app/download_test.go` — Pipelined downloads: concurrency, error propagation, cancellation
-- `internal/app/paths_test.go` — Copy suffix generation
+- `internal/app/paths_test.go` — Copy suffix generation, ExistsWithSize matching, ResolveAvailablePath renaming, RememberPath cache updates
 - `internal/app/source_test.go` — .gitkeep skipping
 - `internal/config/env_test.go` — .env parsing
 
