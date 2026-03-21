@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/Dominux/pentaract-cli/internal/pentaract"
 )
@@ -17,6 +18,7 @@ type remoteNamePlanner struct {
 	client    dirLister
 	token     string
 	storageID string
+	mu        sync.Mutex // C1/C4: thread-safe for concurrent uploads
 	cache     map[string]map[string]struct{}
 }
 
@@ -35,6 +37,10 @@ func (p *remoteNamePlanner) ResolveAvailablePath(ctx context.Context, desired st
 	if err != nil {
 		return "", err
 	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if _, exists := names[name]; !exists {
 		return joinRemotePath(dir, name), nil
 	}
@@ -50,6 +56,8 @@ func (p *remoteNamePlanner) ResolveAvailablePath(ctx context.Context, desired st
 
 func (p *remoteNamePlanner) RememberPath(fullPath string) {
 	dir, name := splitRemotePath(fullPath)
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	names, ok := p.cache[dir]
 	if !ok {
 		names = map[string]struct{}{}
@@ -58,11 +66,39 @@ func (p *remoteNamePlanner) RememberPath(fullPath string) {
 	names[name] = struct{}{}
 }
 
+// PrewarmDirs fetches directory listings in parallel for all unique
+// parent directories of the given files. C4: reduces sequential API
+// calls during upload by pre-populating the cache.
+func (p *remoteNamePlanner) PrewarmDirs(ctx context.Context, destRoot string, files []sourceFile) {
+	dirs := map[string]struct{}{}
+	for _, f := range files {
+		dir, _ := splitRemotePath(joinRemotePath(destRoot, f.RelPath))
+		dirs[dir] = struct{}{}
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 5)
+	for dir := range dirs {
+		dir := dir
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			p.loadDirNames(ctx, dir)
+		}()
+	}
+	wg.Wait()
+}
+
 func (p *remoteNamePlanner) loadDirNames(ctx context.Context, dir string) (map[string]struct{}, error) {
 	dir = cleanRemotePath(dir)
+	p.mu.Lock()
 	if names, ok := p.cache[dir]; ok {
+		p.mu.Unlock()
 		return names, nil
 	}
+	p.mu.Unlock()
 
 	items, err := p.client.ListDir(ctx, p.token, p.storageID, dir)
 	if err != nil {
@@ -73,7 +109,15 @@ func (p *remoteNamePlanner) loadDirNames(ctx context.Context, dir string) (map[s
 	for _, item := range items {
 		names[item.Name] = struct{}{}
 	}
+
+	p.mu.Lock()
+	// Double-check in case another goroutine populated it
+	if existing, ok := p.cache[dir]; ok {
+		p.mu.Unlock()
+		return existing, nil
+	}
 	p.cache[dir] = names
+	p.mu.Unlock()
 	return names, nil
 }
 
@@ -116,4 +160,3 @@ func addCopySuffix(filename string, n int) string {
 	}
 	return fmt.Sprintf("%s (%d)%s", filename[:lastDot], n, filename[lastDot:])
 }
-
