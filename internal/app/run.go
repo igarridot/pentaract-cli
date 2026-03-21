@@ -131,7 +131,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			return err
 		}
 
-		dir, name := splitRemotePath(finalPath)
+		_, name := splitRemotePath(finalPath)
 		fileKey := fmt.Sprintf("%d:%s", index, file.RelPath)
 
 		var lastErr error
@@ -143,7 +143,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 				StorageID:      storageID,
 				Token:          token,
 				LocalPath:      file.AbsPath,
-				RemotePath:     dir,
+				RemotePath:     finalPath,
 				RemoteFilename: name,
 				UploadID:       uploadID,
 				FileSize:       file.Size,
