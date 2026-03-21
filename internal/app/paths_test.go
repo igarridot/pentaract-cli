@@ -23,10 +23,3 @@ func TestAddCopySuffix(t *testing.T) {
 	}
 }
 
-func TestBuildTempUploadPath(t *testing.T) {
-	got := buildTempUploadPath("session123", "backups", "videos/demo.mp4", 2)
-	want := ".pentaract-cli-tmp/session123/backups/videos/demo.__pentaract_cli_session123_02.mp4"
-	if got != want {
-		t.Fatalf("buildTempUploadPath() = %q, want %q", got, want)
-	}
-}

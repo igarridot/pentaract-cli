@@ -104,7 +104,6 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	destRoot := cleanRemotePath(*dest)
 	reporter := newReporter(stdout, stats.Files, stats.Bytes)
 	planner := newRemoteNamePlanner(client, token, storageID)
-	sessionID := newSessionID()
 
 	fmt.Fprintf(stdout, "Subiendo %d archivo(s) a storage %q (%s) en %q desde %s\n", stats.Files, storageName, storageID, emptyFallback(destRoot, "/"), cfg.SourceDir)
 
@@ -117,36 +116,34 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			return err
 		}
 
-		reporter.startFile(index, file, finalPath, 1)
+		dir, name := splitRemotePath(finalPath)
 
-		var tempPath string
-		var uploadCompleted bool
 		var lastErr error
-
 		for attempt := 1; attempt <= cfg.Retries; attempt++ {
 			reporter.startFile(index, file, finalPath, attempt)
-			tempPath = buildTempUploadPath(sessionID, destRoot, file.RelPath, attempt)
-			uploadID := fmt.Sprintf("%s-%d-%d", sessionID, index, attempt)
+			uploadID := fmt.Sprintf("%d-%d", index, attempt)
 
 			err := client.UploadFileWithProgress(ctx, pentaract.UploadInput{
 				StorageID:      storageID,
 				Token:          token,
 				LocalPath:      file.AbsPath,
-				RemotePath:     tempPath,
-				RemoteFilename: remoteFilenameFromPath(tempPath),
+				RemotePath:     dir,
+				RemoteFilename: name,
 				UploadID:       uploadID,
 				OnProgress:     reporter.updateProgress,
 			})
 			if err == nil {
-				uploadCompleted = true
-				break
+				planner.RememberPath(finalPath)
+				reporter.completeFile(file, finalPath)
+				return nil
 			}
 
 			lastErr = err
-			exists, existsErr := client.FileExists(context.WithoutCancel(ctx), token, storageID, tempPath)
+			exists, existsErr := client.FileExists(context.WithoutCancel(ctx), token, storageID, finalPath)
 			if existsErr == nil && exists {
-				uploadCompleted = true
-				break
+				planner.RememberPath(finalPath)
+				reporter.completeFile(file, finalPath)
+				return nil
 			}
 
 			if attempt == cfg.Retries || !pentaract.IsRetryable(err) {
@@ -159,38 +156,10 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			}
 		}
 
-		if !uploadCompleted {
-			if lastErr == nil {
-				lastErr = errors.New("upload did not complete")
-			}
-			return fmt.Errorf("subiendo %s: %w", file.RelPath, lastErr)
+		if lastErr == nil {
+			lastErr = errors.New("upload did not complete")
 		}
-
-		reporter.setStatus("moving", "moviendo al destino final")
-		for moveAttempt := 1; moveAttempt <= cfg.Retries; moveAttempt++ {
-			err := client.Move(ctx, token, storageID, tempPath, finalPath)
-			if err == nil {
-				planner.RememberPath(finalPath)
-				reporter.completeFile(file, finalPath)
-				return nil
-			}
-
-			if moveAttempt == cfg.Retries || !pentaract.IsRetryable(err) {
-				return fmt.Errorf("moviendo %s a %s: %w", tempPath, finalPath, err)
-			}
-
-			planner.Invalidate(pathDir(finalPath))
-			finalPath, err = planner.ResolveAvailablePath(ctx, desiredPath)
-			if err != nil {
-				return err
-			}
-			reporter.setStatus("moving", fmt.Sprintf("reintentando move a %s", finalPath))
-			if err := sleepWithContext(ctx, cfg.RetryDelay); err != nil {
-				return err
-			}
-		}
-
-		return nil
+		return fmt.Errorf("subiendo %s: %w", file.RelPath, lastErr)
 	}, nil)
 	if err != nil {
 		return err
@@ -280,20 +249,6 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
-}
-
-func newSessionID() string {
-	return fmt.Sprintf("%x", time.Now().UnixNano())
-}
-
-func remoteFilenameFromPath(remotePath string) string {
-	_, name := splitRemotePath(remotePath)
-	return name
-}
-
-func pathDir(remotePath string) string {
-	dir, _ := splitRemotePath(remotePath)
-	return dir
 }
 
 func sleepWithContext(ctx context.Context, d time.Duration) error {
