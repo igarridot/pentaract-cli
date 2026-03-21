@@ -1,58 +1,57 @@
 # Pentaract CLI
 
-CLI en Go para subir a Pentaract el contenido de `./source` usando siempre un contenedor.
+Go CLI to upload the contents of `./source` to Pentaract, always running inside a container.
 
-## Flujo recomendado
+## Recommended workflow
 
-1. Crea `.env` a partir de [.env.example](./.env.example).
-2. Deja los archivos a subir en `./source`.
-3. Construye la imagen:
+1. Create `.env` from [.env.example](./.env.example).
+2. Place the files to upload in `./source`.
+3. Build the image:
 
 ```bash
 make build
 ```
 
-4. Ejecuta la subida:
+4. Run the upload:
 
 ```bash
 make upload DEST=backups/2026
 ```
 
-Si quieres forzar el storage en una ejecución concreta:
+To force a specific storage for a single run:
 
 ```bash
-make upload DEST=backups/2026 STORAGE="Mi Storage"
+make upload DEST=backups/2026 STORAGE="My Storage"
 ```
 
 ## Makefile
 
-El proyecto se maneja principalmente con [Makefile](/Volumes/SUNEAST/workspace/pentaract-cli/Makefile):
+The project is managed primarily via [Makefile](./Makefile):
 
-- `make help`: muestra las operaciones disponibles.
-- `make build`: construye la imagen Docker.
-- `make test`: ejecuta `go test ./...`.
-- `make upload DEST=...`: lanza la CLI dentro del contenedor.
-- `make shell`: abre una shell en el contenedor runtime.
-- `make clean`: elimina la imagen local creada por Compose.
+- `make help`: show available targets.
+- `make build`: build the container image.
+- `make test`: run `go test ./...`.
+- `make upload DEST=...`: launch the CLI inside the container.
+- `make shell`: open a shell inside the runtime container.
+- `make clean`: remove the local image created by Compose.
 
-## Configuracion
+## Configuration
 
-Variables soportadas en `.env`:
+Supported variables in `.env`:
 
-- `PENTARACT_BASE_URL`: URL base de Pentaract. Puede ser `http://host:8080` o `http://host:8080/api`.
-- `PENTARACT_EMAIL`: usuario de Pentaract.
-- `PENTARACT_PASSWORD`: password del usuario.
-- `PENTARACT_STORAGE`: nombre o ID del storage por defecto.
-- `PENTARACT_SOURCE_DIR`: por defecto `/source`.
-- `PENTARACT_RETRIES`: reintentos por fichero.
-- `PENTARACT_RETRY_DELAY`: espera entre reintentos.
+- `PENTARACT_BASE_URL`: Pentaract base URL. Can be `http://host:8080` or `http://host:8080/api`.
+- `PENTARACT_EMAIL`: Pentaract user.
+- `PENTARACT_PASSWORD`: user password.
+- `PENTARACT_STORAGE`: default storage name or ID.
+- `PENTARACT_SOURCE_DIR`: defaults to `/source`.
+- `PENTARACT_RETRIES`: retries per file.
+- `PENTARACT_RETRY_DELAY`: delay between retries.
 
-## Comportamiento
+## Behavior
 
-- La CLI recorre `./source`, lo monta como bind volume en `/source` y preserva la estructura relativa en el destino remoto.
-- La subida es por streaming, así que no carga el fichero completo en memoria.
-- Muestra progreso por fichero y progreso global.
-- Reintenta automáticamente cada fichero.
-- Los reintentos suben primero a una ruta temporal y solo mueven al destino final cuando Pentaract confirma la subida.
-- Solo sube ficheros regulares. Symlinks, dispositivos y entradas especiales se omiten.
-- Los directorios vacíos no se crean en remoto.
+- The CLI walks `./source`, bind-mounts it to `/source`, and preserves the relative directory structure in the remote destination.
+- Uploads are streamed, so the entire file is never loaded into memory.
+- Shows per-file progress and global progress.
+- Automatically retries each file on failure.
+- Only uploads regular files. Symlinks, devices, and special entries are skipped.
+- Empty directories are not created remotely.
