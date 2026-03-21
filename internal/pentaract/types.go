@@ -68,5 +68,6 @@ type UploadInput struct {
 	RemotePath     string
 	RemoteFilename string
 	UploadID       string
+	FileSize       int64 // C5: used for adaptive progress polling interval
 	OnProgress     func(UploadProgress)
 }

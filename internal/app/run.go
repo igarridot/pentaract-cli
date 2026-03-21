@@ -6,8 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Dominux/pentaract-cli/internal/config"
@@ -105,11 +107,24 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	reporter := newReporter(stdout, stats.Files, stats.Bytes)
 	planner := newRemoteNamePlanner(client, token, storageID)
 
+	// C4: pre-warm directory cache in parallel
+	var files []sourceFile
+	err = walkSource(cfg.SourceDir, func(file sourceFile) error {
+		files = append(files, file)
+		return nil
+	}, nil)
+	if err != nil {
+		return err
+	}
+
+	planner.PrewarmDirs(ctx, destRoot, files)
+
 	fmt.Fprintf(stdout, "Subiendo %d archivo(s) a storage %q (%s) en %q desde %s\n", stats.Files, storageName, storageID, emptyFallback(destRoot, "/"), cfg.SourceDir)
 
-	index := int64(0)
-	err = walkSource(cfg.SourceDir, func(file sourceFile) error {
-		index++
+	// C1: pipeline uploads — start next file while previous is verifying.
+	// Concurrency of 2 overlaps verification of file N with upload of file N+1.
+	const maxConcurrentUploads = 2
+	err = runPipelinedUploads(ctx, files, maxConcurrentUploads, func(ctx context.Context, index int64, file sourceFile) error {
 		desiredPath := joinRemotePath(destRoot, file.RelPath)
 		finalPath, err := planner.ResolveAvailablePath(ctx, desiredPath)
 		if err != nil {
@@ -131,6 +146,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 				RemotePath:     dir,
 				RemoteFilename: name,
 				UploadID:       uploadID,
+				FileSize:       file.Size,
 				OnProgress: func(p pentaract.UploadProgress) {
 					reporter.updateProgress(fileKey, p)
 				},
@@ -154,8 +170,10 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 				return fmt.Errorf("subiendo %s: %w", file.RelPath, err)
 			}
 
+			// C2: exponential backoff with jitter
+			backoff := retryBackoff(cfg.RetryDelay, attempt)
 			reporter.setStatus(fileKey, "retrying", fmt.Sprintf("reintento %d/%d tras error: %v", attempt, cfg.Retries, err))
-			if err := sleepWithContext(ctx, cfg.RetryDelay); err != nil {
+			if err := sleepWithContext(ctx, backoff); err != nil {
 				reporter.removeFile(fileKey)
 				return err
 			}
@@ -166,13 +184,63 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			lastErr = errors.New("upload did not complete")
 		}
 		return fmt.Errorf("subiendo %s: %w", file.RelPath, lastErr)
-	}, nil)
+	})
 	if err != nil {
 		return err
 	}
 
 	reporter.finish()
 	return nil
+}
+
+// C1: runPipelinedUploads processes files with bounded concurrency.
+// On first error, cancels remaining uploads and returns that error.
+func runPipelinedUploads(ctx context.Context, files []sourceFile, maxConcurrent int, uploadFn func(ctx context.Context, index int64, file sourceFile) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sem := make(chan struct{}, maxConcurrent)
+	var wg sync.WaitGroup
+	var firstErr error
+	var errMu sync.Mutex
+
+loop:
+	for i, file := range files {
+		select {
+		case <-ctx.Done():
+			break loop
+		case sem <- struct{}{}:
+		}
+
+		wg.Add(1)
+		go func(index int64, f sourceFile) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			if err := uploadFn(ctx, index, f); err != nil {
+				errMu.Lock()
+				if firstErr == nil {
+					firstErr = err
+					cancel()
+				}
+				errMu.Unlock()
+			}
+		}(int64(i+1), file)
+	}
+	wg.Wait()
+	return firstErr
+}
+
+// C2: retryBackoff calculates exponential backoff with jitter.
+// baseDelay * 2^(attempt-1) + random jitter up to 25% of the delay.
+func retryBackoff(baseDelay time.Duration, attempt int) time.Duration {
+	delay := baseDelay
+	for i := 1; i < attempt; i++ {
+		delay *= 2
+	}
+	// Add jitter: 0-25% of the delay
+	jitter := time.Duration(rand.Int64N(int64(delay) / 4))
+	return delay + jitter
 }
 
 func loginWithRetry(ctx context.Context, client *pentaract.Client, email, password string, retries int, delay time.Duration) (string, error) {

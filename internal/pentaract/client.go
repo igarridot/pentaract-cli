@@ -20,7 +20,16 @@ import (
 	"time"
 )
 
-const progressRetryDelay = time.Second
+// C5: adaptive progress polling — shorter during verification, longer for large files.
+func progressPollInterval(fileSize int64, status string) time.Duration {
+	if status == "verifying" {
+		return 500 * time.Millisecond
+	}
+	if fileSize > 100*1024*1024 { // >100 MB
+		return 2 * time.Second
+	}
+	return time.Second
+}
 
 var errUploadTrackerNotFound = errors.New("upload progress tracker not found")
 
@@ -46,9 +55,18 @@ func NewClient(rawBaseURL string) (*Client, error) {
 		return nil, err
 	}
 
+	// C3: custom transport with connection pooling for concurrent
+	// upload + progress polling requests.
 	return &Client{
 		apiBase: apiBase,
-		http:    &http.Client{},
+		http: &http.Client{
+			Transport: &http.Transport{
+				MaxIdleConns:        20,
+				MaxIdleConnsPerHost: 10,
+				IdleConnTimeout:     90 * time.Second,
+				ForceAttemptHTTP2:   true,
+			},
+		},
 	}, nil
 }
 
@@ -203,7 +221,7 @@ func (c *Client) StartUpload(ctx context.Context, input UploadInput) (*UploadHan
 	}
 
 	go func() {
-		handle.watchErrCh <- c.watchUploadProgress(ctx, input.Token, input.UploadID, requestDone, input.OnProgress)
+		handle.watchErrCh <- c.watchUploadProgress(ctx, input.Token, input.UploadID, input.FileSize, requestDone, input.OnProgress)
 	}()
 
 	go func() {
@@ -306,8 +324,9 @@ func buildMultipartEnvelope(parentDir, remoteFilename, uploadID string) (prefix,
 	return prefix, suffix, contentType, nil
 }
 
-func (c *Client) watchUploadProgress(ctx context.Context, token, uploadID string, requestDone <-chan struct{}, onProgress func(UploadProgress)) error {
+func (c *Client) watchUploadProgress(ctx context.Context, token, uploadID string, fileSize int64, requestDone <-chan struct{}, onProgress func(UploadProgress)) error {
 	requestFinished := false
+	lastStatus := "uploading"
 
 	for {
 		select {
@@ -319,19 +338,26 @@ func (c *Client) watchUploadProgress(ctx context.Context, token, uploadID string
 		default:
 		}
 
+		// C5: adaptive polling interval
+		pollDelay := progressPollInterval(fileSize, lastStatus)
+
 		progress, terminal, err := c.consumeUploadProgressOnce(ctx, token, uploadID, onProgress)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if err := sleepWithContext(ctx, progressRetryDelay); err != nil {
+			if err := sleepWithContext(ctx, pollDelay); err != nil {
 				return err
 			}
 			continue
 		}
 
+		if progress.Status != "" {
+			lastStatus = progress.Status
+		}
+
 		if !terminal {
-			if err := sleepWithContext(ctx, progressRetryDelay); err != nil {
+			if err := sleepWithContext(ctx, pollDelay); err != nil {
 				return err
 			}
 			continue
@@ -341,7 +367,7 @@ func (c *Client) watchUploadProgress(ctx context.Context, token, uploadID string
 			if requestFinished {
 				return errUploadTrackerNotFound
 			}
-			if err := sleepWithContext(ctx, progressRetryDelay); err != nil {
+			if err := sleepWithContext(ctx, pollDelay); err != nil {
 				return err
 			}
 			continue
