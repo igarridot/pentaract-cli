@@ -41,6 +41,12 @@ Download files from a remote path to `./downloaded_files`:
 make download SRC=backups/2026
 ```
 
+To use a custom local directory:
+
+```bash
+make download SRC=backups/2026 DOWNLOADS_PATH=/mnt/data
+```
+
 To force a specific storage:
 
 ```bash
@@ -57,6 +63,7 @@ The project is managed primarily via [Makefile](./Makefile):
 - `make upload DEST=...`: upload `./source` to the given remote path.
 - `make upload DEST=... ON_CONFLICT=skip`: skip already-uploaded files (same name, path, size).
 - `make download SRC=...`: download remote path to `./downloaded_files`.
+- `make download SRC=... DOWNLOADS_PATH=...`: download to a custom local directory.
 - `make shell`: open a shell inside the runtime container.
 - `make clean`: remove the local image created by Compose.
 

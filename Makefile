@@ -5,6 +5,7 @@ DEST ?=
 SRC ?=
 STORAGE ?=
 ON_CONFLICT ?= keep_both
+DOWNLOADS_PATH ?= ./downloaded_files
 SCREEN_SESSION ?= pentaract-cli
 
 .PHONY: help build test upload download shell screen clean
@@ -35,8 +36,8 @@ upload:
 
 download:
 	@if [ -z "$(SRC)" ]; then echo 'Usage: make download SRC=remote/path [STORAGE="My Storage"]'; exit 1; fi
-	@mkdir -p ./downloaded_files
-	$(COMPOSE) run --rm -v $(PENTARACT_DOWNLOADS_PATH):/downloads $(SERVICE) download --env-file $(ENV_FILE) $(if $(STORAGE),--storage "$(STORAGE)",) --src "$(SRC)"
+	@mkdir -p $(DOWNLOADS_PATH)
+	$(COMPOSE) run --rm -v $(DOWNLOADS_PATH):/downloads $(SERVICE) download --env-file $(ENV_FILE) $(if $(STORAGE),--storage "$(STORAGE)",) --src "$(SRC)"
 
 shell:
 	$(COMPOSE) run --rm --entrypoint /bin/sh $(SERVICE)
