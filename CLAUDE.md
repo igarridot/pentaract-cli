@@ -75,6 +75,8 @@ All via environment variables or `.env` file (env vars override):
 
 ## Testing
 
+**All new features and bug fixes must include tests.** Do not submit code without corresponding test coverage.
+
 Zero external dependencies — only Go standard library.
 
 ```bash
@@ -83,6 +85,8 @@ go test ./...
 
 Tests use `httptest.NewServer` for HTTP mocking. Key test files:
 - `internal/pentaract/client_test.go` — Upload streaming, progress parsing, multipart envelope
+- `internal/pentaract/download_test.go` — Download streaming, progress callback, error handling, partial cleanup
+- `internal/app/download_test.go` — Pipelined downloads: concurrency, error propagation, cancellation
 - `internal/app/paths_test.go` — Copy suffix generation
 - `internal/app/source_test.go` — .gitkeep skipping
 - `internal/config/env_test.go` — .env parsing
