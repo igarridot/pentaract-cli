@@ -247,7 +247,7 @@ func (c *Client) postUpload(ctx context.Context, token, storageID, localPath, re
 	}
 
 	parentDir, _ := splitRemotePath(remotePath)
-	prefix, suffix, contentType, err := buildMultipartEnvelope(parentDir, remoteFilename, uploadID, onConflict)
+	prefix, suffix, contentType, err := buildMultipartEnvelope(parentDir, remoteFilename, uploadID, onConflict, fileInfo.Size())
 	if err != nil {
 		return err
 	}
@@ -299,7 +299,7 @@ func (c *Client) postUpload(ctx context.Context, token, storageID, localPath, re
 	return nil
 }
 
-func buildMultipartEnvelope(parentDir, remoteFilename, uploadID, onConflict string) (prefix, suffix []byte, contentType string, err error) {
+func buildMultipartEnvelope(parentDir, remoteFilename, uploadID, onConflict string, fileSize int64) (prefix, suffix []byte, contentType string, err error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
@@ -311,6 +311,11 @@ func buildMultipartEnvelope(parentDir, remoteFilename, uploadID, onConflict stri
 	}
 	if err := writer.WriteField("on_conflict", onConflict); err != nil {
 		return nil, nil, "", err
+	}
+	if fileSize > 0 {
+		if err := writer.WriteField("file_size", fmt.Sprintf("%d", fileSize)); err != nil {
+			return nil, nil, "", err
+		}
 	}
 	if _, err := writer.CreateFormFile("file", remoteFilename); err != nil {
 		return nil, nil, "", err

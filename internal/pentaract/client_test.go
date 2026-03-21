@@ -211,7 +211,7 @@ func TestStartUploadSeparatesRequestCompletionFromTerminalVerification(t *testin
 }
 
 func TestBuildMultipartEnvelopeProducesValidBody(t *testing.T) {
-	prefix, suffix, contentType, err := buildMultipartEnvelope("dir/sub", "remote.bin", "upload-9", "keep_both")
+	prefix, suffix, contentType, err := buildMultipartEnvelope("dir/sub", "remote.bin", "upload-9", "keep_both", 4)
 	if err != nil {
 		t.Fatalf("buildMultipartEnvelope error: %v", err)
 	}
@@ -256,6 +256,9 @@ func TestBuildMultipartEnvelopeProducesValidBody(t *testing.T) {
 	if fields["on_conflict"] != "keep_both" {
 		t.Fatalf("on_conflict = %q, want keep_both", fields["on_conflict"])
 	}
+	if fields["file_size"] != "4" {
+		t.Fatalf("file_size = %q, want 4", fields["file_size"])
+	}
 	if fields["file_name"] != "remote.bin" {
 		t.Fatalf("file name = %q, want remote.bin", fields["file_name"])
 	}
@@ -265,7 +268,7 @@ func TestBuildMultipartEnvelopeProducesValidBody(t *testing.T) {
 }
 
 func TestBuildMultipartEnvelopePassesOnConflictSkip(t *testing.T) {
-	prefix, suffix, contentType, err := buildMultipartEnvelope("dir", "file.txt", "u1", "skip")
+	prefix, suffix, contentType, err := buildMultipartEnvelope("dir", "file.txt", "u1", "skip", 1024)
 	if err != nil {
 		t.Fatalf("buildMultipartEnvelope error: %v", err)
 	}
