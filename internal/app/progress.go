@@ -121,7 +121,7 @@ func (r *reporter) completeFile(fileKey string, file sourceFile, finalTarget str
 	state.Status = "done"
 	state.TargetPath = finalTarget
 	state.UploadedBytes = file.Size
-	state.LastMessage = "subida completada"
+	state.LastMessage = "upload complete"
 	r.printLocked(state, true)
 }
 
@@ -138,7 +138,7 @@ func (r *reporter) finish() {
 
 	fmt.Fprintf(
 		r.out,
-		"Resumen: %d/%d archivos completados, %s/%s transferidos.\n",
+		"Summary: %d/%d files completed, %s/%s transferred.\n",
 		r.completedFiles,
 		r.totalFiles,
 		humanBytes(r.completedBytes),
@@ -173,7 +173,7 @@ func (r *reporter) printLocked(state currentFileState, force bool) {
 
 	fmt.Fprintf(
 		r.out,
-		"[%d/%d] %s -> %s | intento %d | estado=%s | fichero %.1f%% (%s/%s) | chunks %d/%d | verificacion %d/%d | workers=%s\n",
+		"[%d/%d] %s -> %s | attempt %d | status=%s | file %.1f%% (%s/%s) | chunks %d/%d | verification %d/%d | workers=%s\n",
 		state.Index,
 		state.TotalFiles,
 		state.RelativePath,
@@ -191,7 +191,7 @@ func (r *reporter) printLocked(state currentFileState, force bool) {
 	)
 	fmt.Fprintf(
 		r.out,
-		"Global: %d/%d archivos, %.1f%% (%s/%s)%s\n",
+		"Global: %d/%d files, %.1f%% (%s/%s)%s\n",
 		r.completedFiles,
 		r.totalFiles,
 		globalPercent,

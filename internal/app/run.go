@@ -39,11 +39,11 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	fs.SetOutput(stderr)
 
 	var (
-		envFile = fs.String("env-file", ".env", "Ruta del fichero .env")
-		storage = fs.String("storage", "", "Nombre o ID del storage")
-		dest    = fs.String("dest", "", "Ruta destino dentro del storage")
-		source  = fs.String("source", "", "Directorio origen dentro del contenedor")
-		retries = fs.Int("retries", 0, "Numero maximo de intentos por fichero")
+		envFile = fs.String("env-file", ".env", "Path to the .env file")
+		storage = fs.String("storage", "", "Storage name or ID")
+		dest    = fs.String("dest", "", "Destination path inside the storage")
+		source  = fs.String("source", "", "Source directory inside the container")
+		retries = fs.Int("retries", 0, "Maximum retries per file")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -71,10 +71,10 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 
 	storageRef := firstNonEmpty(*storage, cfg.DefaultStorage)
 	if storageRef == "" {
-		return errors.New("debes indicar --storage o definir PENTARACT_STORAGE")
+		return errors.New("must specify --storage or set PENTARACT_STORAGE")
 	}
 	if cfg.BaseURL == "" || cfg.Email == "" || cfg.Password == "" {
-		return errors.New("faltan credenciales: revisa PENTARACT_BASE_URL, PENTARACT_EMAIL y PENTARACT_PASSWORD")
+		return errors.New("missing credentials: check PENTARACT_BASE_URL, PENTARACT_EMAIL, and PENTARACT_PASSWORD")
 	}
 
 	client, err := pentaract.NewClient(cfg.BaseURL)
@@ -87,15 +87,15 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return err
 	}
 	if stats.Files == 0 {
-		return fmt.Errorf("no hay ficheros regulares para subir en %s", cfg.SourceDir)
+		return fmt.Errorf("no regular files to upload in %s", cfg.SourceDir)
 	}
 	if len(stats.SkippedEntries) > 0 {
-		fmt.Fprintf(stderr, "Aviso: se omiten %d entradas no compatibles (symlinks, dispositivos o especiales).\n", len(stats.SkippedEntries))
+		fmt.Fprintf(stderr, "Warning: skipping %d unsupported entries (symlinks, devices, or special files).\n", len(stats.SkippedEntries))
 	}
 
 	token, err := loginWithRetry(ctx, client, cfg.Email, cfg.Password, cfg.Retries, cfg.RetryDelay)
 	if err != nil {
-		return fmt.Errorf("login en Pentaract: %w", err)
+		return fmt.Errorf("Pentaract login: %w", err)
 	}
 
 	storageID, storageName, err := resolveStorage(ctx, client, token, storageRef)
@@ -119,7 +119,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 
 	planner.PrewarmDirs(ctx, destRoot, files)
 
-	fmt.Fprintf(stdout, "Subiendo %d archivo(s) a storage %q (%s) en %q desde %s\n", stats.Files, storageName, storageID, emptyFallback(destRoot, "/"), cfg.SourceDir)
+	fmt.Fprintf(stdout, "Uploading %d file(s) to storage %q (%s) at %q from %s\n", stats.Files, storageName, storageID, emptyFallback(destRoot, "/"), cfg.SourceDir)
 
 	// C1: pipeline uploads — start next file while previous is verifying.
 	// Concurrency of 2 overlaps verification of file N with upload of file N+1.
@@ -167,12 +167,12 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 
 			if attempt == cfg.Retries || !pentaract.IsRetryable(err) {
 				reporter.removeFile(fileKey)
-				return fmt.Errorf("subiendo %s: %w", file.RelPath, err)
+				return fmt.Errorf("uploading %s: %w", file.RelPath, err)
 			}
 
 			// C2: exponential backoff with jitter
 			backoff := retryBackoff(cfg.RetryDelay, attempt)
-			reporter.setStatus(fileKey, "retrying", fmt.Sprintf("reintento %d/%d tras error: %v", attempt, cfg.Retries, err))
+			reporter.setStatus(fileKey, "retrying", fmt.Sprintf("retry %d/%d after error: %v", attempt, cfg.Retries, err))
 			if err := sleepWithContext(ctx, backoff); err != nil {
 				reporter.removeFile(fileKey)
 				return err
@@ -183,7 +183,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		if lastErr == nil {
 			lastErr = errors.New("upload did not complete")
 		}
-		return fmt.Errorf("subiendo %s: %w", file.RelPath, lastErr)
+		return fmt.Errorf("uploading %s: %w", file.RelPath, lastErr)
 	})
 	if err != nil {
 		return err
@@ -264,7 +264,7 @@ func loginWithRetry(ctx context.Context, client *pentaract.Client, email, passwo
 func resolveStorage(ctx context.Context, client *pentaract.Client, token, ref string) (string, string, error) {
 	storages, err := client.ListStorages(ctx, token)
 	if err != nil {
-		return "", "", fmt.Errorf("listando storages: %w", err)
+		return "", "", fmt.Errorf("listing storages: %w", err)
 	}
 
 	ref = strings.TrimSpace(ref)
@@ -281,7 +281,7 @@ func resolveStorage(ctx context.Context, client *pentaract.Client, token, ref st
 			continue
 		}
 		if matched != nil {
-			return "", "", fmt.Errorf("el storage %q es ambiguo; usa el ID exacto", ref)
+			return "", "", fmt.Errorf("storage %q is ambiguous; use the exact ID", ref)
 		}
 		storageCopy := storage
 		matched = &storageCopy
@@ -290,7 +290,7 @@ func resolveStorage(ctx context.Context, client *pentaract.Client, token, ref st
 		return matched.ID, matched.Name, nil
 	}
 
-	return "", "", fmt.Errorf("storage %q no encontrado", ref)
+	return "", "", fmt.Errorf("storage %q not found", ref)
 }
 
 func ensureContainer() error {
@@ -303,17 +303,17 @@ func ensureContainer() error {
 			return nil
 		}
 	}
-	return errors.New("esta CLI debe ejecutarse dentro de un contenedor")
+	return errors.New("this CLI must run inside a container")
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, "Uso:")
-	fmt.Fprintln(w, "  pentaract-cli upload --storage <id|nombre> --dest <ruta>")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pentaract-cli upload --storage <id|name> --dest <path>")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Opciones:")
-	fmt.Fprintln(w, "  --env-file .env   Ruta del .env con credenciales")
-	fmt.Fprintln(w, "  --source /source  Directorio origen dentro del contenedor")
-	fmt.Fprintln(w, "  --retries 3       Reintentos por fichero")
+	fmt.Fprintln(w, "Options:")
+	fmt.Fprintln(w, "  --env-file .env   Path to .env with credentials")
+	fmt.Fprintln(w, "  --source /source  Source directory inside the container")
+	fmt.Fprintln(w, "  --retries 3       Retries per file")
 }
 
 func firstNonEmpty(values ...string) string {

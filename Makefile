@@ -9,14 +9,14 @@ SCREEN_SESSION ?= pentaract-cli
 
 help:
 	@printf '%s\n' \
-		'Objetivos disponibles:' \
-		'  make build                     Construye la imagen del contenedor' \
-		'  make test                      Ejecuta go test ./...' \
-		'  make upload DEST=...           Sube ./source al destino remoto indicado' \
-		'  make upload DEST=... STORAGE=...  Fuerza storage concreto para esta ejecucion' \
-		'  make shell                     Abre una shell dentro del contenedor runtime' \
-		'  make screen                    Reutiliza o crea la sesion screen pentaract-cli' \
-		'  make clean                     Elimina la imagen local creada por compose'
+		'Available targets:' \
+		'  make build                     Build the container image' \
+		'  make test                      Run go test ./...' \
+		'  make upload DEST=...           Upload ./source to the given remote path' \
+		'  make upload DEST=... STORAGE=...  Force a specific storage for this run' \
+		'  make shell                     Open a shell inside the runtime container' \
+		'  make screen                    Reuse or create the screen session pentaract-cli' \
+		'  make clean                     Remove the local image created by compose'
 
 build:
 	$(COMPOSE) build $(SERVICE)
@@ -25,7 +25,7 @@ test:
 	go test ./...
 
 upload:
-	@if [ -z "$(DEST)" ]; then echo 'Uso: make upload DEST=ruta/remota [STORAGE="Mi Storage"]'; exit 1; fi
+	@if [ -z "$(DEST)" ]; then echo 'Usage: make upload DEST=remote/path [STORAGE="My Storage"]'; exit 1; fi
 	$(COMPOSE) run --rm $(SERVICE) upload --env-file $(ENV_FILE) $(if $(STORAGE),--storage "$(STORAGE)",) --dest "$(DEST)"
 
 shell:
