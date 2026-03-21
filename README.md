@@ -1,18 +1,19 @@
 # Pentaract CLI
 
-Go CLI to upload the contents of `./source` to Pentaract, always running inside a container.
+Go CLI to upload and download files to/from Pentaract, always running inside a container.
 
 ## Recommended workflow
 
 1. Create `.env` from [.env.example](./.env.example).
-2. Place the files to upload in `./source`.
-3. Build the image:
+2. Build the image:
 
 ```bash
 make build
 ```
 
-4. Run the upload:
+### Upload
+
+Place the files to upload in `./source`, then run:
 
 ```bash
 make upload DEST=backups/2026
@@ -24,6 +25,20 @@ To force a specific storage for a single run:
 make upload DEST=backups/2026 STORAGE="My Storage"
 ```
 
+### Download
+
+Download files from a remote path to `./downloaded_files`:
+
+```bash
+make download SRC=backups/2026
+```
+
+To force a specific storage:
+
+```bash
+make download SRC=backups/2026 STORAGE="My Storage"
+```
+
 ## Makefile
 
 The project is managed primarily via [Makefile](./Makefile):
@@ -31,7 +46,8 @@ The project is managed primarily via [Makefile](./Makefile):
 - `make help`: show available targets.
 - `make build`: build the container image.
 - `make test`: run `go test ./...`.
-- `make upload DEST=...`: launch the CLI inside the container.
+- `make upload DEST=...`: upload `./source` to the given remote path.
+- `make download SRC=...`: download remote path to `./downloaded_files`.
 - `make shell`: open a shell inside the runtime container.
 - `make clean`: remove the local image created by Compose.
 
@@ -49,9 +65,16 @@ Supported variables in `.env`:
 
 ## Behavior
 
-- The CLI walks `./source`, bind-mounts it to `/source`, and preserves the relative directory structure in the remote destination.
+### Upload
+- Walks `./source`, bind-mounts it to `/source`, and preserves the relative directory structure in the remote destination.
 - Uploads are streamed, so the entire file is never loaded into memory.
 - Shows per-file progress and global progress.
 - Automatically retries each file on failure.
 - Only uploads regular files. Symlinks, devices, and special entries are skipped.
 - Empty directories are not created remotely.
+
+### Download
+- Recursively lists all files under the specified remote path.
+- Downloads each file to `./downloaded_files`, preserving the relative directory structure.
+- Streams directly to disk without buffering the full file in memory.
+- Automatically retries each file on failure with exponential backoff.
