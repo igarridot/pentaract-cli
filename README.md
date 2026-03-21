@@ -19,6 +19,14 @@ Place the files to upload in `./source`, then run:
 make upload DEST=backups/2026
 ```
 
+To skip files that already exist on the remote with the same name, path, and size:
+
+```bash
+make upload DEST=backups/2026 ON_CONFLICT=skip
+```
+
+The default conflict mode is `keep_both`, which renames duplicates with a `(1)`, `(2)` suffix.
+
 To force a specific storage for a single run:
 
 ```bash
@@ -47,6 +55,7 @@ The project is managed primarily via [Makefile](./Makefile):
 - `make build`: build the container image.
 - `make test`: run `go test ./...`.
 - `make upload DEST=...`: upload `./source` to the given remote path.
+- `make upload DEST=... ON_CONFLICT=skip`: skip already-uploaded files (same name, path, size).
 - `make download SRC=...`: download remote path to `./downloaded_files`.
 - `make shell`: open a shell inside the runtime container.
 - `make clean`: remove the local image created by Compose.
@@ -70,6 +79,7 @@ Supported variables in `.env`:
 - Uploads are streamed, so the entire file is never loaded into memory.
 - Shows per-file progress and global progress.
 - Automatically retries each file on failure.
+- Supports `--on-conflict skip` to skip files already present on the remote (matching name, path, and size). Default is `keep_both` (renames with suffix).
 - Only uploads regular files. Symlinks, devices, and special entries are skipped.
 - Empty directories are not created remotely.
 

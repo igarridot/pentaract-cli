@@ -225,7 +225,11 @@ func (c *Client) StartUpload(ctx context.Context, input UploadInput) (*UploadHan
 	}()
 
 	go func() {
-		postErr := c.postUpload(ctx, input.Token, input.StorageID, input.LocalPath, remotePath, remoteFilename, input.UploadID)
+		onConflict := input.OnConflict
+		if onConflict == "" {
+			onConflict = "keep_both"
+		}
+		postErr := c.postUpload(ctx, input.Token, input.StorageID, input.LocalPath, remotePath, remoteFilename, input.UploadID, onConflict)
 		close(requestDone)
 		handle.requestErrCh <- postErr
 	}()
@@ -233,7 +237,7 @@ func (c *Client) StartUpload(ctx context.Context, input UploadInput) (*UploadHan
 	return handle, nil
 }
 
-func (c *Client) postUpload(ctx context.Context, token, storageID, localPath, remotePath, remoteFilename, uploadID string) error {
+func (c *Client) postUpload(ctx context.Context, token, storageID, localPath, remotePath, remoteFilename, uploadID, onConflict string) error {
 	fileInfo, err := os.Stat(localPath)
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", localPath, err)
@@ -243,7 +247,7 @@ func (c *Client) postUpload(ctx context.Context, token, storageID, localPath, re
 	}
 
 	parentDir, _ := splitRemotePath(remotePath)
-	prefix, suffix, contentType, err := buildMultipartEnvelope(parentDir, remoteFilename, uploadID)
+	prefix, suffix, contentType, err := buildMultipartEnvelope(parentDir, remoteFilename, uploadID, onConflict)
 	if err != nil {
 		return err
 	}
@@ -295,7 +299,7 @@ func (c *Client) postUpload(ctx context.Context, token, storageID, localPath, re
 	return nil
 }
 
-func buildMultipartEnvelope(parentDir, remoteFilename, uploadID string) (prefix, suffix []byte, contentType string, err error) {
+func buildMultipartEnvelope(parentDir, remoteFilename, uploadID, onConflict string) (prefix, suffix []byte, contentType string, err error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
@@ -305,7 +309,7 @@ func buildMultipartEnvelope(parentDir, remoteFilename, uploadID string) (prefix,
 	if err := writer.WriteField("upload_id", uploadID); err != nil {
 		return nil, nil, "", err
 	}
-	if err := writer.WriteField("on_conflict", "keep_both"); err != nil {
+	if err := writer.WriteField("on_conflict", onConflict); err != nil {
 		return nil, nil, "", err
 	}
 	if _, err := writer.CreateFormFile("file", remoteFilename); err != nil {
