@@ -58,10 +58,6 @@ func (p *remoteNamePlanner) RememberPath(fullPath string) {
 	names[name] = struct{}{}
 }
 
-func (p *remoteNamePlanner) Invalidate(dir string) {
-	delete(p.cache, cleanRemotePath(dir))
-}
-
 func (p *remoteNamePlanner) loadDirNames(ctx context.Context, dir string) (map[string]struct{}, error) {
 	dir = cleanRemotePath(dir)
 	if names, ok := p.cache[dir]; ok {
@@ -121,16 +117,3 @@ func addCopySuffix(filename string, n int) string {
 	return fmt.Sprintf("%s (%d)%s", filename[:lastDot], n, filename[lastDot:])
 }
 
-func buildTempUploadPath(sessionID, destRoot, relativePath string, attempt int) string {
-	relDir, relName := splitRemotePath(relativePath)
-	lastDot := strings.LastIndex(relName, ".")
-	stem := relName
-	ext := ""
-	if lastDot > 0 {
-		stem = relName[:lastDot]
-		ext = relName[lastDot:]
-	}
-
-	tempName := fmt.Sprintf("%s.__pentaract_cli_%s_%02d%s", stem, sessionID, attempt, ext)
-	return joinRemotePath(".pentaract-cli-tmp", sessionID, destRoot, relDir, tempName)
-}
