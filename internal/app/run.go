@@ -41,11 +41,12 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	fs.SetOutput(stderr)
 
 	var (
-		envFile = fs.String("env-file", ".env", "Path to the .env file")
-		storage = fs.String("storage", "", "Storage name or ID")
-		dest    = fs.String("dest", "", "Destination path inside the storage")
-		source  = fs.String("source", "", "Source directory inside the container")
-		retries = fs.Int("retries", 0, "Maximum retries per file")
+		envFile    = fs.String("env-file", ".env", "Path to the .env file")
+		storage    = fs.String("storage", "", "Storage name or ID")
+		dest       = fs.String("dest", "", "Destination path inside the storage")
+		source     = fs.String("source", "", "Source directory inside the container")
+		retries    = fs.Int("retries", 0, "Maximum retries per file")
+		onConflict = fs.String("on-conflict", "keep_both", "Conflict mode: skip (skip files matching name, path, and size) or keep_both (rename with suffix)")
 	)
 
 	if err := fs.Parse(args); err != nil {
@@ -53,6 +54,11 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %s", strings.Join(fs.Args(), " "))
+	}
+
+	conflictMode := *onConflict
+	if conflictMode != "skip" && conflictMode != "keep_both" {
+		return fmt.Errorf("invalid --on-conflict value %q: must be skip or keep_both", conflictMode)
 	}
 
 	if err := ensureContainer(); err != nil {
@@ -123,11 +129,27 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 
 	fmt.Fprintf(stdout, "Uploading %d file(s) to storage %q (%s) at %q from %s\n", stats.Files, storageName, storageID, emptyFallback(destRoot, "/"), cfg.SourceDir)
 
+	var skippedFiles int64
+
 	// C1: pipeline uploads — start next file while previous is verifying.
 	// Concurrency of 2 overlaps verification of file N with upload of file N+1.
 	const maxConcurrentUploads = 2
 	err = runPipelinedUploads(ctx, files, maxConcurrentUploads, func(ctx context.Context, index int64, file sourceFile) error {
 		desiredPath := joinRemotePath(destRoot, file.RelPath)
+
+		// In skip mode, check if the file already exists with the same size
+		if conflictMode == "skip" {
+			exists, err := planner.ExistsWithSize(ctx, desiredPath, file.Size)
+			if err != nil {
+				return err
+			}
+			if exists {
+				skippedFiles++
+				fmt.Fprintf(stdout, "[%d/%d] %s — skipped (already exists with same size)\n", index, stats.Files, file.RelPath)
+				return nil
+			}
+		}
+
 		finalPath, err := planner.ResolveAvailablePath(ctx, desiredPath)
 		if err != nil {
 			return err
@@ -149,12 +171,13 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 				RemoteFilename: name,
 				UploadID:       uploadID,
 				FileSize:       file.Size,
+				OnConflict:     conflictMode,
 				OnProgress: func(p pentaract.UploadProgress) {
 					reporter.updateProgress(fileKey, p)
 				},
 			})
 			if err == nil {
-				planner.RememberPath(finalPath)
+				planner.RememberPath(finalPath, file.Size)
 				reporter.completeFile(fileKey, file, finalPath)
 				return nil
 			}
@@ -162,7 +185,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			lastErr = err
 			exists, existsErr := client.FileExists(context.WithoutCancel(ctx), token, storageID, finalPath)
 			if existsErr == nil && exists {
-				planner.RememberPath(finalPath)
+				planner.RememberPath(finalPath, file.Size)
 				reporter.completeFile(fileKey, file, finalPath)
 				return nil
 			}
@@ -192,6 +215,9 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	}
 
 	reporter.finish()
+	if skippedFiles > 0 {
+		fmt.Fprintf(stdout, "Skipped %d file(s) (already exist with same size)\n", skippedFiles)
+	}
 	return nil
 }
 
@@ -317,6 +343,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  --env-file .env   Path to .env with credentials")
 	fmt.Fprintln(w, "  --source /source  Source directory inside the container")
 	fmt.Fprintln(w, "  --dest <path>     Destination path inside the storage")
+	fmt.Fprintln(w, "  --on-conflict     skip or keep_both (default: keep_both)")
 	fmt.Fprintln(w, "  --retries 3       Retries per file")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Download options:")

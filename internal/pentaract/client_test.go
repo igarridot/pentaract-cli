@@ -211,7 +211,7 @@ func TestStartUploadSeparatesRequestCompletionFromTerminalVerification(t *testin
 }
 
 func TestBuildMultipartEnvelopeProducesValidBody(t *testing.T) {
-	prefix, suffix, contentType, err := buildMultipartEnvelope("dir/sub", "remote.bin", "upload-9")
+	prefix, suffix, contentType, err := buildMultipartEnvelope("dir/sub", "remote.bin", "upload-9", "keep_both")
 	if err != nil {
 		t.Fatalf("buildMultipartEnvelope error: %v", err)
 	}
@@ -253,11 +253,48 @@ func TestBuildMultipartEnvelopeProducesValidBody(t *testing.T) {
 	if fields["upload_id"] != "upload-9" {
 		t.Fatalf("upload_id = %q, want upload-9", fields["upload_id"])
 	}
+	if fields["on_conflict"] != "keep_both" {
+		t.Fatalf("on_conflict = %q, want keep_both", fields["on_conflict"])
+	}
 	if fields["file_name"] != "remote.bin" {
 		t.Fatalf("file name = %q, want remote.bin", fields["file_name"])
 	}
 	if fields["file_body"] != "DATA" {
 		t.Fatalf("file body = %q, want DATA", fields["file_body"])
+	}
+}
+
+func TestBuildMultipartEnvelopePassesOnConflictSkip(t *testing.T) {
+	prefix, suffix, contentType, err := buildMultipartEnvelope("dir", "file.txt", "u1", "skip")
+	if err != nil {
+		t.Fatalf("buildMultipartEnvelope error: %v", err)
+	}
+
+	payload := append([]byte{}, prefix...)
+	payload = append(payload, []byte("DATA")...)
+	payload = append(payload, suffix...)
+
+	_, params, err := mimeParseMediaType(contentType)
+	if err != nil {
+		t.Fatalf("mimeParseMediaType error: %v", err)
+	}
+
+	reader := multipart.NewReader(strings.NewReader(string(payload)), params["boundary"])
+	fields := map[string]string{}
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("NextPart error: %v", err)
+		}
+		data, _ := io.ReadAll(part)
+		fields[part.FormName()] = string(data)
+	}
+
+	if fields["on_conflict"] != "skip" {
+		t.Fatalf("on_conflict = %q, want skip", fields["on_conflict"])
 	}
 }
 
@@ -342,7 +379,7 @@ func TestPostUploadWaitsUntilServerConsumesMultipartBody(t *testing.T) {
 		t.Fatalf("WriteFile error: %v", err)
 	}
 
-	if err := client.postUpload(context.Background(), "token", "storage-1", localPath, "dest/large.bin", "large.bin", "u1"); err != nil {
+	if err := client.postUpload(context.Background(), "token", "storage-1", localPath, "dest/large.bin", "large.bin", "u1", "keep_both"); err != nil {
 		t.Fatalf("postUpload error: %v", err)
 	}
 

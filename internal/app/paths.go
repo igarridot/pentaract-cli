@@ -19,7 +19,7 @@ type remoteNamePlanner struct {
 	token     string
 	storageID string
 	mu        sync.Mutex // C1/C4: thread-safe for concurrent uploads
-	cache     map[string]map[string]struct{}
+	cache     map[string]map[string]int64 // dir → name → size
 }
 
 func newRemoteNamePlanner(client dirLister, token, storageID string) *remoteNamePlanner {
@@ -27,7 +27,7 @@ func newRemoteNamePlanner(client dirLister, token, storageID string) *remoteName
 		client:    client,
 		token:     token,
 		storageID: storageID,
-		cache:     map[string]map[string]struct{}{},
+		cache:     map[string]map[string]int64{},
 	}
 }
 
@@ -54,16 +54,32 @@ func (p *remoteNamePlanner) ResolveAvailablePath(ctx context.Context, desired st
 	}
 }
 
-func (p *remoteNamePlanner) RememberPath(fullPath string) {
+// ExistsWithSize checks if a file with the given path and size already exists
+// on the remote. Uses the pre-warmed cache when available.
+func (p *remoteNamePlanner) ExistsWithSize(ctx context.Context, desired string, size int64) (bool, error) {
+	dir, name := splitRemotePath(desired)
+	names, err := p.loadDirNames(ctx, dir)
+	if err != nil {
+		return false, err
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	remoteSize, exists := names[name]
+	return exists && remoteSize == size, nil
+}
+
+func (p *remoteNamePlanner) RememberPath(fullPath string, size int64) {
 	dir, name := splitRemotePath(fullPath)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	names, ok := p.cache[dir]
 	if !ok {
-		names = map[string]struct{}{}
+		names = map[string]int64{}
 		p.cache[dir] = names
 	}
-	names[name] = struct{}{}
+	names[name] = size
 }
 
 // PrewarmDirs fetches directory listings in parallel for all unique
@@ -91,7 +107,7 @@ func (p *remoteNamePlanner) PrewarmDirs(ctx context.Context, destRoot string, fi
 	wg.Wait()
 }
 
-func (p *remoteNamePlanner) loadDirNames(ctx context.Context, dir string) (map[string]struct{}, error) {
+func (p *remoteNamePlanner) loadDirNames(ctx context.Context, dir string) (map[string]int64, error) {
 	dir = cleanRemotePath(dir)
 	p.mu.Lock()
 	if names, ok := p.cache[dir]; ok {
@@ -105,9 +121,9 @@ func (p *remoteNamePlanner) loadDirNames(ctx context.Context, dir string) (map[s
 		return nil, fmt.Errorf("listing remote dir %q: %w", dir, err)
 	}
 
-	names := map[string]struct{}{}
+	names := map[string]int64{}
 	for _, item := range items {
-		names[item.Name] = struct{}{}
+		names[item.Name] = item.Size
 	}
 
 	p.mu.Lock()
