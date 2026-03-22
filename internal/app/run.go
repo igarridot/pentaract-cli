@@ -182,6 +182,17 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 				return nil
 			}
 
+			// If the upload was interrupted by cancellation (Ctrl+C),
+			// tell the backend to cancel the upload and clean up partial
+			// chunks from Telegram.
+			if ctx.Err() != nil {
+				cancelCtx, cancelFn := context.WithTimeout(context.Background(), 10*time.Second)
+				_ = client.CancelUpload(cancelCtx, token, uploadID)
+				cancelFn()
+				reporter.removeFile(fileKey)
+				return ctx.Err()
+			}
+
 			lastErr = err
 			exists, existsErr := client.FileExists(context.WithoutCancel(ctx), token, storageID, finalPath)
 			if existsErr == nil && exists {
@@ -211,6 +222,9 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return fmt.Errorf("uploading %s: %w", file.RelPath, lastErr)
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			fmt.Fprintf(stderr, "\nUpload cancelled. Partial uploads have been cleaned up on the server.\n")
+		}
 		return err
 	}
 
