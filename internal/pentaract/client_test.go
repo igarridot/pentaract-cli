@@ -397,6 +397,144 @@ func TestPostUploadWaitsUntilServerConsumesMultipartBody(t *testing.T) {
 	}
 }
 
+func TestCancelUploadSendsCorrectRequest(t *testing.T) {
+	var cancelCalled atomic.Bool
+	var receivedAuth string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/upload_cancel/upload-42" {
+			cancelCalled.Store(true)
+			receivedAuth = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+
+	if err := client.CancelUpload(context.Background(), "my-token", "upload-42"); err != nil {
+		t.Fatalf("CancelUpload error: %v", err)
+	}
+
+	if !cancelCalled.Load() {
+		t.Fatal("CancelUpload did not hit the cancel endpoint")
+	}
+	if receivedAuth != "Bearer my-token" {
+		t.Fatalf("Authorization = %q, want Bearer my-token", receivedAuth)
+	}
+}
+
+func TestCancelUploadWorksWithFreshContextAfterParentCancelled(t *testing.T) {
+	var cancelCalled atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/upload_cancel/") {
+			cancelCalled.Store(true)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+
+	// Simulate: parent context is already cancelled (Ctrl+C happened)
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// CancelUpload with the cancelled context should fail
+	err = client.CancelUpload(cancelledCtx, "token", "upload-1")
+	if err == nil {
+		t.Fatal("expected error with cancelled context")
+	}
+
+	// But with a fresh context (as the CLI does), it should succeed
+	freshCtx, freshCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer freshCancel()
+
+	err = client.CancelUpload(freshCtx, "token", "upload-1")
+	if err != nil {
+		t.Fatalf("CancelUpload with fresh context: %v", err)
+	}
+
+	if !cancelCalled.Load() {
+		t.Fatal("CancelUpload with fresh context did not reach the server")
+	}
+}
+
+func TestUploadFileWithProgressReturnsCancelledOnContextCancel(t *testing.T) {
+	uploadStarted := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/storages/s1/files/upload":
+			close(uploadStarted)
+			// Block until the client disconnects
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusAccepted)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/upload_progress":
+			// Return non-terminal status so the watcher keeps polling
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"status\":\"uploading\",\"total\":1,\"uploaded\":0}\n\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(srv.URL)
+	if err != nil {
+		t.Fatalf("NewClient error: %v", err)
+	}
+
+	dir := t.TempDir()
+	localPath := filepath.Join(dir, "file.txt")
+	if err := os.WriteFile(localPath, []byte("data"), 0o600); err != nil {
+		t.Fatalf("WriteFile error: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.UploadFileWithProgress(ctx, UploadInput{
+			StorageID:      "s1",
+			Token:          "token",
+			LocalPath:      localPath,
+			RemotePath:     "dest/file.txt",
+			RemoteFilename: "file.txt",
+			UploadID:       "u1",
+		})
+	}()
+
+	// Wait for the upload to start, then cancel
+	select {
+	case <-uploadStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upload did not start in time")
+	}
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("expected error after context cancellation")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("UploadFileWithProgress did not return after context cancellation")
+	}
+}
+
 func mimeParseMediaType(v string) (string, map[string]string, error) {
 	header := http.Header{}
 	header.Set("Content-Type", v)
