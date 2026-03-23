@@ -56,3 +56,37 @@ func TestLoadEnvOverridesFile(t *testing.T) {
 		t.Fatalf("source dir = %q, want /source", cfg.SourceDir)
 	}
 }
+
+func TestLoadTelegramCredentials(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "123456:ABC-testtoken")
+	t.Setenv("TELEGRAM_CHAT_ID", "-100987654321")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.TelegramBotToken != "123456:ABC-testtoken" {
+		t.Fatalf("TelegramBotToken = %q, want 123456:ABC-testtoken", cfg.TelegramBotToken)
+	}
+	if cfg.TelegramChatID != "-100987654321" {
+		t.Fatalf("TelegramChatID = %q, want -100987654321", cfg.TelegramChatID)
+	}
+}
+
+func TestLoadTelegramCredentials_EmptyByDefault(t *testing.T) {
+	t.Setenv("TELEGRAM_BOT_TOKEN", "")
+	t.Setenv("TELEGRAM_CHAT_ID", "")
+
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if cfg.TelegramBotToken != "" {
+		t.Fatalf("TelegramBotToken should be empty by default, got %q", cfg.TelegramBotToken)
+	}
+	if cfg.TelegramChatID != "" {
+		t.Fatalf("TelegramChatID should be empty by default, got %q", cfg.TelegramChatID)
+	}
+}

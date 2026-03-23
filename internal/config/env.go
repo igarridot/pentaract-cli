@@ -18,13 +18,15 @@ const (
 )
 
 type Settings struct {
-	BaseURL        string
-	Email          string
-	Password       string
-	DefaultStorage string
-	SourceDir      string
-	Retries        int
-	RetryDelay     time.Duration
+	BaseURL             string
+	Email               string
+	Password            string
+	DefaultStorage      string
+	SourceDir           string
+	Retries             int
+	RetryDelay          time.Duration
+	TelegramBotToken    string
+	TelegramChatID      string
 }
 
 func Load(envFile string) (Settings, error) {
@@ -38,13 +40,15 @@ func Load(envFile string) (Settings, error) {
 	}
 
 	cfg := Settings{
-		BaseURL:        lookupValue("PENTARACT_BASE_URL", fileValues),
-		Email:          lookupValue("PENTARACT_EMAIL", fileValues),
-		Password:       lookupValue("PENTARACT_PASSWORD", fileValues),
-		DefaultStorage: lookupValue("PENTARACT_STORAGE", fileValues),
-		SourceDir:      defaultString(lookupValue("PENTARACT_SOURCE_DIR", fileValues), defaultSourceDir),
-		Retries:        defaultRetryCount,
-		RetryDelay:     defaultRetryDelay,
+		BaseURL:          lookupValue("PENTARACT_BASE_URL", fileValues),
+		Email:            lookupValue("PENTARACT_EMAIL", fileValues),
+		Password:         lookupValue("PENTARACT_PASSWORD", fileValues),
+		DefaultStorage:   lookupValue("PENTARACT_STORAGE", fileValues),
+		SourceDir:        defaultString(lookupValue("PENTARACT_SOURCE_DIR", fileValues), defaultSourceDir),
+		Retries:          defaultRetryCount,
+		RetryDelay:       defaultRetryDelay,
+		TelegramBotToken: lookupValue("TELEGRAM_BOT_TOKEN", fileValues),
+		TelegramChatID:   lookupValue("TELEGRAM_CHAT_ID", fileValues),
 	}
 
 	if raw := lookupValue("PENTARACT_RETRIES", fileValues); raw != "" {
