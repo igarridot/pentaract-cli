@@ -17,13 +17,13 @@ type reporter struct {
 	totalBytes     int64
 	completedFiles int64
 	completedBytes int64
+	nextIndex      int64 // upload sequence; increments only for non-skipped files
 	active         map[string]currentFileState
 	lastPrint      time.Time
 }
 
 type currentFileState struct {
 	Index             int64
-	TotalFiles        int64
 	RelativePath      string
 	TargetPath        string
 	Size              int64
@@ -47,13 +47,22 @@ func newReporter(out io.Writer, totalFiles, totalBytes int64) *reporter {
 	}
 }
 
-func (r *reporter) startFile(fileKey string, index int64, file sourceFile, targetPath string, attempt int) {
+func (r *reporter) startFile(fileKey string, _ int64, file sourceFile, targetPath string, attempt int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// On retries the file is already in active; reuse its display index.
+	// On first attempt assign the next upload sequence number.
+	var displayIndex int64
+	if existing, ok := r.active[fileKey]; ok {
+		displayIndex = existing.Index
+	} else {
+		r.nextIndex++
+		displayIndex = r.nextIndex
+	}
+
 	state := currentFileState{
-		Index:         index,
-		TotalFiles:    r.totalFiles,
+		Index:         displayIndex,
 		RelativePath:  file.RelPath,
 		TargetPath:    targetPath,
 		Size:          file.Size,
@@ -186,7 +195,7 @@ func (r *reporter) printLocked(state currentFileState, force bool) {
 		r.out,
 		"[%d/%d] %s -> %s | attempt %d | status=%s | file %.1f%% (%s/%s) | chunks %d/%d | verification %d/%d | workers=%s\n",
 		state.Index,
-		state.TotalFiles,
+		r.totalFiles,
 		state.RelativePath,
 		state.TargetPath,
 		state.Attempt,
