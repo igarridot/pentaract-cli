@@ -247,6 +247,19 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if skippedFiles > 0 {
 		fmt.Fprintf(stdout, "Skipped %d file(s) (already exist with same size)\n", skippedFiles)
 	}
+
+	uploadedFiles := stats.Files - skippedFiles
+	msg := fmt.Sprintf(
+		"Upload completed successfully!\n%d file(s) uploaded to storage %q at %q",
+		uploadedFiles, storageName, emptyFallback(destRoot, "/"),
+	)
+	if skippedFiles > 0 {
+		msg += fmt.Sprintf("\n%d file(s) skipped (already existed)", skippedFiles)
+	}
+	if notifyErr := notifier.Send(ctx, msg); notifyErr != nil {
+		fmt.Fprintf(stderr, "Warning: failed to send Telegram notification: %v\n", notifyErr)
+	}
+
 	return nil
 }
 
