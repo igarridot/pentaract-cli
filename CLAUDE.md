@@ -49,6 +49,7 @@ Signal handling (SIGINT/SIGTERM) → context cancellation → `app.Run()`.
 - `internal/app/` — Upload orchestration (`run.go`), download orchestration (`download.go`), file discovery (`source.go`), remote path resolution and conflict detection (`paths.go`), CLI progress reporting (`progress.go`)
 - `internal/pentaract/` — HTTP client for Pentaract API (`client.go`), data types (`types.go`)
 - `internal/config/` — .env file parsing and configuration loading (`env.go`)
+- `internal/telegram/` — Optional Telegram notifier (`notifier.go`); nil-safe, disabled when credentials are absent
 
 ### Key design decisions
 
@@ -74,6 +75,8 @@ All via environment variables or `.env` file (env vars override):
 | `PENTARACT_SOURCE_DIR` | `/source` | Local directory to upload |
 | `PENTARACT_RETRIES` | `3` | Max attempts per file |
 | `PENTARACT_RETRY_DELAY` | `2s` | Base delay between retries |
+| `TELEGRAM_BOT_TOKEN` | *(empty)* | Telegram bot token — enables notifications when set together with `TELEGRAM_CHAT_ID` |
+| `TELEGRAM_CHAT_ID` | *(empty)* | Telegram chat ID (exact value from Telegram, including any minus sign) |
 
 ## Testing
 
@@ -92,6 +95,7 @@ Tests use `httptest.NewServer` for HTTP mocking. Key test files:
 - `internal/app/paths_test.go` — Copy suffix generation, ExistsWithSize matching, ResolveAvailablePath renaming, RememberPath cache updates
 - `internal/app/source_test.go` — .gitkeep skipping
 - `internal/config/env_test.go` — .env parsing
+- `internal/telegram/notifier_test.go` — nil-safety, payload shape, non-200 error, network failure
 
 ## Container enforcement
 

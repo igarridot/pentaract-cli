@@ -78,6 +78,35 @@ Supported variables in `.env`:
 - `PENTARACT_SOURCE_DIR`: defaults to `/source`.
 - `PENTARACT_RETRIES`: retries per file.
 - `PENTARACT_RETRY_DELAY`: delay between retries.
+- `TELEGRAM_BOT_TOKEN` *(optional)*: Telegram bot token in the form `{bot_id}:{hash}`, obtained from [@BotFather](https://t.me/BotFather).
+- `TELEGRAM_CHAT_ID` *(optional)*: Telegram chat ID to send notifications to. Both variables must be set to enable notifications; if either is absent notifications are silently disabled.
+
+### Telegram notifications
+
+When `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set, the CLI sends a Telegram message whenever:
+
+- **A specific file fails to upload** — the message includes the file path and the error.
+- **The upload process fails for a non-file reason** (e.g. login failure, storage not found) — a general failure message is sent.
+
+Cancellations triggered by the user (Ctrl+C) do not produce a notification.
+
+#### How to find the chat ID
+
+The chat ID format depends on the destination:
+
+| Destination | Example ID |
+|---|---|
+| Private chat with the bot | `123456789` (positive) |
+| Group | `-123456789` (negative) |
+| Supergroup or channel | `-1001234567890` (negative, starts with `-100`) |
+
+The easiest way to get the correct value is to send a message to the bot (or add it to the group/channel) and then call:
+
+```
+https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
+```
+
+Copy the `chat.id` field from the response exactly as it appears, including any minus sign.
 
 ## Behavior
 
