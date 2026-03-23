@@ -165,6 +165,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		fileKey := fmt.Sprintf("%d:%s", index, file.RelPath)
 
 		var lastErr error
+		startTime := time.Now()
 		for attempt := 1; attempt <= cfg.Retries; attempt++ {
 			reporter.startFile(fileKey, index, file, finalPath, attempt)
 			uploadID := fmt.Sprintf("%d-%d", index, attempt)
@@ -184,8 +185,10 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			})
 			if err == nil {
 				planner.RememberPath(finalPath, file.Size)
+				duration := time.Since(startTime)
 				reporter.completeFile(fileKey, file, finalPath)
-				if notifyErr := notifier.Send(ctx, fmt.Sprintf("✅ File uploaded successfully: %s → %s", file.RelPath, finalPath)); notifyErr != nil {
+				msg := fmt.Sprintf("✅ File uploaded: %s → %s\n📦 Size: %s\n⏱️ Time: %s", file.RelPath, finalPath, formatBytes(uint64(file.Size)), duration)
+				if notifyErr := notifier.Send(ctx, msg); notifyErr != nil {
 					fmt.Fprintf(stderr, "Warning: failed to send Telegram notification: %v\n", notifyErr)
 				}
 				return nil
@@ -424,4 +427,19 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// formatBytes converts bytes to a human-readable string.
+func formatBytes(b uint64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	units := []string{"KiB", "MiB", "GiB", "TiB"}
+	return fmt.Sprintf("%.2f %s", float64(b)/float64(div), units[exp])
 }
