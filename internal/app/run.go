@@ -150,6 +150,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			}
 			if exists {
 				skippedFiles++
+				reporter.skipFile(file.Size)
 				fmt.Fprintf(stdout, "[%d/%d] %s — skipped (already exists with same size)\n", index, stats.Files, file.RelPath)
 				return nil
 			}

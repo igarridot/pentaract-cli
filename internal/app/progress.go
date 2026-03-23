@@ -132,6 +132,17 @@ func (r *reporter) removeFile(fileKey string) {
 	delete(r.active, fileKey)
 }
 
+// skipFile removes a file from the reporter totals so that progress
+// percentages and the final summary reflect only the files that were
+// actually uploaded.
+func (r *reporter) skipFile(size int64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	r.totalFiles--
+	r.totalBytes -= size
+}
+
 func (r *reporter) finish() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
