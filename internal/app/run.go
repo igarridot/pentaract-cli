@@ -10,10 +10,12 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Dominux/pentaract-cli/internal/config"
 	"github.com/Dominux/pentaract-cli/internal/pentaract"
+	"github.com/Dominux/pentaract-cli/internal/telegram"
 )
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
@@ -85,6 +87,8 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 		return errors.New("missing credentials: check PENTARACT_BASE_URL, PENTARACT_EMAIL, and PENTARACT_PASSWORD")
 	}
 
+	notifier := telegram.NewNotifier(cfg.TelegramBotToken, cfg.TelegramChatID)
+
 	client, err := pentaract.NewClient(cfg.BaseURL)
 	if err != nil {
 		return err
@@ -130,6 +134,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	fmt.Fprintf(stdout, "Uploading %d file(s) to storage %q (%s) at %q from %s\n", stats.Files, storageName, storageID, emptyFallback(destRoot, "/"), cfg.SourceDir)
 
 	var skippedFiles int64
+	var fileFailureNotified atomic.Bool
 
 	// C1: pipeline uploads — start next file while previous is verifying.
 	// Concurrency of 2 overlaps verification of file N with upload of file N+1.
@@ -145,6 +150,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			}
 			if exists {
 				skippedFiles++
+				reporter.skipFile(file.Size)
 				fmt.Fprintf(stdout, "[%d/%d] %s — skipped (already exists with same size)\n", index, stats.Files, file.RelPath)
 				return nil
 			}
@@ -203,6 +209,10 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 
 			if attempt == cfg.Retries || !pentaract.IsRetryable(err) {
 				reporter.removeFile(fileKey)
+				fileFailureNotified.Store(true)
+				if notifyErr := notifier.Send(ctx, fmt.Sprintf("Upload failed for file: %s\nError: %v", file.RelPath, err)); notifyErr != nil {
+					fmt.Fprintf(stderr, "Warning: failed to send Telegram notification: %v\n", notifyErr)
+				}
 				return fmt.Errorf("uploading %s: %w", file.RelPath, err)
 			}
 
@@ -224,6 +234,11 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 	if err != nil {
 		if ctx.Err() != nil {
 			fmt.Fprintf(stderr, "\nUpload cancelled. Partial uploads have been cleaned up on the server.\n")
+		} else if !fileFailureNotified.Load() {
+			// Overall process failure not caused by a specific file — notify once.
+			if notifyErr := notifier.Send(ctx, fmt.Sprintf("Upload process failed: %v", err)); notifyErr != nil {
+				fmt.Fprintf(stderr, "Warning: failed to send Telegram notification: %v\n", notifyErr)
+			}
 		}
 		return err
 	}
