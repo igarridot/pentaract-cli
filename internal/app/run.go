@@ -185,6 +185,9 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			if err == nil {
 				planner.RememberPath(finalPath, file.Size)
 				reporter.completeFile(fileKey, file, finalPath)
+				if notifyErr := notifier.Send(ctx, fmt.Sprintf("✅ File uploaded successfully: %s → %s", file.RelPath, finalPath)); notifyErr != nil {
+					fmt.Fprintf(stderr, "Warning: failed to send Telegram notification: %v\n", notifyErr)
+				}
 				return nil
 			}
 
@@ -204,13 +207,16 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			if existsErr == nil && exists {
 				planner.RememberPath(finalPath, file.Size)
 				reporter.completeFile(fileKey, file, finalPath)
+				if notifyErr := notifier.Send(ctx, fmt.Sprintf("✅ File uploaded successfully: %s → %s", file.RelPath, finalPath)); notifyErr != nil {
+					fmt.Fprintf(stderr, "Warning: failed to send Telegram notification: %v\n", notifyErr)
+				}
 				return nil
 			}
 
 			if attempt == cfg.Retries || !pentaract.IsRetryable(err) {
 				reporter.removeFile(fileKey)
 				fileFailureNotified.Store(true)
-				if notifyErr := notifier.Send(ctx, fmt.Sprintf("Upload failed for file: %s\nError: %v", file.RelPath, err)); notifyErr != nil {
+				if notifyErr := notifier.Send(ctx, fmt.Sprintf("🚨 Upload failed for file: %s\nError: %v", file.RelPath, err)); notifyErr != nil {
 					fmt.Fprintf(stderr, "Warning: failed to send Telegram notification: %v\n", notifyErr)
 				}
 				return fmt.Errorf("uploading %s: %w", file.RelPath, err)
@@ -236,7 +242,7 @@ func runUpload(ctx context.Context, args []string, stdout, stderr io.Writer) err
 			fmt.Fprintf(stderr, "\nUpload cancelled. Partial uploads have been cleaned up on the server.\n")
 		} else if !fileFailureNotified.Load() {
 			// Overall process failure not caused by a specific file — notify once.
-			if notifyErr := notifier.Send(ctx, fmt.Sprintf("Upload process failed: %v", err)); notifyErr != nil {
+			if notifyErr := notifier.Send(ctx, fmt.Sprintf("🚨🚨🚨🚨🚨 Upload process failed: %v", err)); notifyErr != nil {
 				fmt.Fprintf(stderr, "Warning: failed to send Telegram notification: %v\n", notifyErr)
 			}
 		}
