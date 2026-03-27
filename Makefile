@@ -43,11 +43,7 @@ shell:
 	$(COMPOSE) run --rm --entrypoint /bin/sh $(SERVICE)
 
 screen:
-	@if screen -ls | grep -Eq '[[:digit:]]+\.$(SCREEN_SESSION)[[:space:]]'; then \
-		exec screen -xRR "$(SCREEN_SESSION)"; \
-	else \
-		exec screen -S "$(SCREEN_SESSION)"; \
-	fi
+	@exec screen -D -RR "$(SCREEN_SESSION)"
 
 clean:
 	$(COMPOSE) down --rmi local --remove-orphans
