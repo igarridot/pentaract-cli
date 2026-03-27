@@ -43,7 +43,12 @@ shell:
 	$(COMPOSE) run --rm --entrypoint /bin/sh $(SERVICE)
 
 screen:
-	@exec screen -D -RR "$(SCREEN_SESSION)"
+	@session_id=$$(screen -ls | awk -v session="$(SCREEN_SESSION)" '$$1 ~ ("\\." session "$$") { print $$1; exit }'); \
+	if [ -n "$$session_id" ]; then \
+		exec screen -D -r "$$session_id"; \
+	else \
+		exec screen -S "$(SCREEN_SESSION)"; \
+	fi
 
 clean:
 	$(COMPOSE) down --rmi local --remove-orphans
